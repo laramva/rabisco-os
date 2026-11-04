@@ -1,0 +1,16 @@
+{
+  "name": "Rabisco OS — 365 dias de desenho",
+  "short_name": "Rabisco OS",
+  "description": "Prática diária de desenho guiada pelas aulas da Ilustra Academy, com streak, desafios e Lab Cósmico.",
+  "start_url": "./index.html#hoje",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#cfeee5",
+  "theme_color": "#c8ebe1",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

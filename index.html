@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Rabisco OS</title>
+  <meta name="description" content="365 dias de prática de desenho guiada pelas aulas da Ilustra Academy, com streak, desafios e o Lab Cósmico de sci-fi, cyberpunk e criaturas.">
+  <meta name="theme-color" content="#c8ebe1">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Silkscreen&family=Space+Mono:ital,wght@0,400;0,700;1,400&family=VT323&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="desktop">
+    <header class="topbar">
+      <a class="logo" href="#hoje" aria-label="Rabisco OS — início">
+        <svg viewBox="0 0 48 48" aria-hidden="true">
+          <rect x="3" y="7" width="42" height="30" fill="#f7c6d4" stroke="#2a2433" stroke-width="2.5"/>
+          <rect x="8" y="12" width="32" height="20" fill="#1b1726" stroke="#2a2433" stroke-width="2"/>
+          <path d="M14 27 L21 18 L25 23 L28 20 L34 27" fill="none" stroke="#b8ffd9" stroke-width="2"/>
+          <circle cx="31" cy="16" r="2.5" fill="#fbf1c4"/>
+          <rect x="17" y="37" width="14" height="4" fill="#d9cdf3" stroke="#2a2433" stroke-width="2"/>
+          <rect x="11" y="41" width="26" height="4" fill="#c8ebe1" stroke="#2a2433" stroke-width="2"/>
+        </svg>
+        <div><b>RABISCO OS</b><span>365 dias de desenho · v1.0</span></div>
+      </a>
+      <span class="spacer"></span>
+      <div class="chips" id="chips"></div>
+    </header>
+    <main id="main"><p class="mono">Carregando o sistema...</p></main>
+    <noscript><div class="note warn">Ative o JavaScript para usar o Rabisco OS.</div></noscript>
+  </div>
+  <nav class="taskbar" id="taskbar" aria-label="Navegação"></nav>
+
+  <script>window.EX = {}; function EXD(courseKey, lessons) { window.EX[courseKey] = lessons; }</script>
+  <script src="data/courses.js"></script>
+  <script src="data/ex-fundamentos.js"></script>
+  <script src="data/ex-semirrealista.js"></script>
+  <script src="data/ex-cartoon.js"></script>
+  <script src="data/ex-fad.js"></script>
+  <script src="data/ex-tradicional.js"></script>
+  <script src="data/ex-extras.js"></script>
+  <script src="data/challenges.js"></script>
+  <script src="data/lab.js"></script>
+  <script src="data/tips.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

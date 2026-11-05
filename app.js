@@ -117,22 +117,40 @@
     theme: "light",
     gist: { id: "", token: "", lastSync: "" },
     timerMin: 30,
+    xpBy: {},          // deviceId -> XP earned on that device (sync adds them up)
+    mt: {},            // "ex:<id>" / "day:<n>" / "lab:<k>" / "cfg:<field>" -> last change, so sync keeps the newest edit
   });
+
+  // Random id for this browser, kept outside the synced state.
+  const DEVICE = (() => {
+    try {
+      let d = localStorage.getItem("rabisco-os-device");
+      if (!d) { d = Math.random().toString(36).slice(2, 10); localStorage.setItem("rabisco-os-device", d); }
+      return d;
+    } catch (e) { return "local"; }
+  })();
+  function fixState(s) {
+    const o = Object.assign(defaultState(), s);
+    o.gist = Object.assign({ id: "", token: "", lastSync: "" }, o.gist);
+    if (o.xp && !Object.keys(o.xpBy).length) o.xpBy = { [DEVICE]: o.xp };
+    return o;
+  }
+  const touch = (k) => { S.mt[k] = new Date().toISOString(); };
 
   let S = load();
   function load() {
     try {
       const raw = localStorage.getItem(STORE_KEY);
-      if (raw) return Object.assign(defaultState(), JSON.parse(raw));
+      if (raw) return fixState(JSON.parse(raw));
     } catch (e) { console.warn(e); }
     return defaultState();
   }
-  function save(silent) {
+  function save(silent, noSync) {
     S.updatedAt = new Date().toISOString();
     try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch (e) { toast("Não consegui salvar no navegador: " + e.message, "⚠️"); }
     idbPut("kv", "state", S).catch(() => {});
     if (!silent) renderChips();
-    scheduleAutoSync();
+    if (!noSync) scheduleAutoSync();
   }
 
   /* ---------------------------------------------------------------- IndexedDB (photos + mirror) */
@@ -157,7 +175,7 @@
     try {
       const mirror = await idbGet("kv", "state");
       if (mirror && (!localStorage.getItem(STORE_KEY) || (mirror.updatedAt || "") > (S.updatedAt || ""))) {
-        if (Object.keys(mirror.days || {}).length > Object.keys(S.days || {}).length) { S = Object.assign(defaultState(), mirror); save(true); route(); }
+        if (Object.keys(mirror.days || {}).length > Object.keys(S.days || {}).length) { S = fixState(mirror); save(true); route(); }
       }
     } catch (e) {}
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
@@ -201,6 +219,7 @@
     if (gap.length <= S.freezes) {
       gap.forEach((g) => (S.usedFreezes[g] = true));
       S.freezes -= gap.length;
+      touch("cfg:freezes");
       save(true);
       setTimeout(() => toast(`Usei ${gap.length} cristal(is) de gelo ❄️ para proteger sua streak!`, "❄️"), 600);
     }
@@ -218,7 +237,8 @@
   }
   function addXP(n, why) {
     const before = level().i;
-    S.xp += n;
+    S.xpBy[DEVICE] = (S.xpBy[DEVICE] || 0) + n;
+    S.xp = Object.values(S.xpBy).reduce((a, b) => a + b, 0);
     const after = level();
     if (after.i > before) setTimeout(() => { confetti(); toast(`LEVEL UP! Nível ${after.i}: ${after.name}`, "🌟"); }, 400);
     if (why) toast(`+${n} XP · ${why}`, "✨");
@@ -316,7 +336,8 @@
       <span class="chip fire" title="Streak atual">🔥 ${streak()} dia(s)</span>
       <span class="chip ice" title="Cristais de gelo: protegem sua streak se você perder um dia">❄️ ${S.freezes}</span>
       <span class="chip xp" title="${esc(lv.name)}">⭐ Nv ${lv.i} · ${S.xp} XP</span>
-      <span class="chip" title="Dias concluídos">📅 ${doneCount()}/365</span>`;
+      <span class="chip" title="Dias concluídos">📅 ${doneCount()}/365</span>
+      ${S.gist.token ? `<span class="chip" data-go="config" role="button" title="${esc(syncTitle())}">${{ sync: "☁️ …", ok: "☁️ ✔", erro: "☁️ ⚠️", offline: "☁️ off" }[syncMsg] || "☁️"}</span>` : ""}`;
   }
 
   /* ---------------------------------------------------------------- routes */
@@ -714,13 +735,19 @@
         <div class="btn-row"><button class="btn mint" data-act="export">💾 Baixar backup (progresso)</button><button class="btn" data-act="export-full">💾 Backup completo (+ fotos)</button>
         <label class="btn butter">📂 Restaurar backup<input type="file" accept=".json,application/json" id="imp" hidden></label></div>
         <p class="muted" style="font-size:13px;margin-top:10px">Dica: guarde o arquivo no Google Drive/iCloud. Pra passar pra outro aparelho, é só abrir o site lá e restaurar.</p>`, { icon: "💾" })}
-      ${win("Sync_GitHub.net", `
-        <p>Sincronize automaticamente entre celular, tablet e computador usando um <b>Gist secreto</b> da sua conta GitHub (grátis).</p>
-        <ol style="font-size:13.5px"><li>No GitHub: Settings → Developer settings → Personal access tokens → <i>Fine-grained</i> ou <i>classic</i> com permissão <b>gist</b>.</li><li>Cole o token abaixo (fica salvo só neste aparelho).</li><li>Clique em “Enviar”. No outro aparelho, cole o mesmo token e o ID do gist e clique em “Baixar”.</li></ol>
-        <label class="field">Token do GitHub (permissão gist)<input type="password" id="gist-token" value="${esc(g.token || "")}" autocomplete="off"></label>
-        <label class="field">ID do Gist (preenchido automaticamente no 1º envio)<input type="text" id="gist-id" value="${esc(g.id || "")}"></label>
-        <div class="btn-row"><button class="btn lilac" data-act="gist-push">⬆ Enviar</button><button class="btn" data-act="gist-pull">⬇ Baixar</button></div>
-        <p class="muted" style="font-size:13px;margin-top:8px">${g.lastSync ? "Última sincronização: " + new Date(g.lastSync).toLocaleString("pt-BR") : "Ainda não sincronizado."} Com token salvo, o envio é automático após cada dia concluído. As fotos não vão pro Gist (só no backup completo).</p>`, { icon: "🌐" })}
+      ${win("Sync_PC+iPad.net", g.token ? `
+        <p>Este aparelho está <b>conectado</b>. O progresso sincroniza sozinho quando você abre o app, a cada exercício marcado e quando sai dele. O que você fizer no PC e no iPad é <b>somado</b>, nada é apagado.</p>
+        ${syncMsg === "erro" ? `<div class="note warn">⚠️ ${esc(syncErr)}</div>` : `<div class="note">${syncMsg === "sync" ? "☁️ Sincronizando…" : g.lastSync ? "✔ Última sincronização: " + new Date(g.lastSync).toLocaleString("pt-BR") : "☁️ Conectando…"}</div>`}
+        <div class="btn-row" style="margin-top:10px"><button class="btn lilac" data-act="gist-sync">🔄 Sincronizar agora</button><button class="btn sm" data-act="gist-off">Desconectar este aparelho</button></div>
+        <p class="muted" style="font-size:13px;margin-top:10px">Pra conectar outro aparelho, abra o Rabisco OS nele, vá em 💾 Backup e cole um token (pode ser o mesmo ou um novo). As fotos da Galeria não sincronizam: ficam no aparelho e vão no backup completo.</p>` : `
+        <p>Use no <b>PC, iPad e celular</b> com o mesmo progresso, via um <b>Gist secreto</b> da sua conta GitHub (grátis). Faça isto <b>uma vez em cada aparelho</b>:</p>
+        <ol style="font-size:13.5px;padding-left:20px">
+          <li><a class="btn sm mint" href="https://github.com/settings/tokens/new?scopes=gist&amp;description=Rabisco%20OS" target="_blank" rel="noopener">🔑 Criar token no GitHub</a><br>Em <i>Expiration</i> escolha <b>No expiration</b>, deixe marcada só a caixa <b>gist</b> e clique em <i>Generate token</i>.</li>
+          <li>Copie o código que começa com <code>ghp_</code>, volte aqui e cole:</li>
+        </ol>
+        <label class="field">Token do GitHub<input type="password" id="gist-token" placeholder="ghp_…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <div class="btn-row"><button class="btn lilac" data-act="gist-connect">🔗 Conectar e sincronizar</button></div>
+        <p class="muted" style="font-size:13px;margin-top:10px">📱 <b>No iPad:</b> faça isso <b>dentro do app da tela de início</b>, não no Safari (o iPad guarda os dados dos dois separados). O token fica salvo só no aparelho e só é enviado para o GitHub.</p>`, { icon: "🌐" })}
       ${win("Sobre.txt", `
         <p><b>Rabisco OS</b>: trilha de 365 dias com ${LESSONS.length} aulas, ${LESSONS.length * 2} exercícios, ${CHALLENGES.length} desafios e o Lab Cósmico. Funciona sem internet depois do 1º acesso e pode ser instalado como app (menu do navegador → “Instalar” / “Adicionar à tela inicial”).</p>
         <p class="muted" style="font-size:13px">Os links das aulas abrem a Ilustra Academy (precisa estar logado(a) lá). Este site é um caderno de exercícios pessoal e não é afiliado à Ilustra Academy.</p>
@@ -737,7 +764,7 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   }
   async function doExport(full) {
-    const payload = { app: "rabisco-os", v: 1, exportedAt: new Date().toISOString(), state: S };
+    const payload = { app: "rabisco-os", v: 1, exportedAt: new Date().toISOString(), state: Object.assign({}, S, { gist: { id: S.gist.id } }) }; // never write the token into a file
     if (full) payload.photos = await idbAll("photos").catch(() => []);
     S._backedUp = true; save(true); checkBadges();
     download(`rabisco-os-backup-${todayISO()}${full ? "-completo" : ""}.json`, JSON.stringify(payload));
@@ -749,7 +776,7 @@
       if (data.app !== "rabisco-os" || !data.state) throw new Error("arquivo não é um backup do Rabisco OS");
       if (!confirm("Restaurar este backup? O progresso atual deste aparelho será substituído (as fotos são somadas).")) return;
       const keepGist = S.gist;
-      S = Object.assign(defaultState(), data.state);
+      S = fixState(data.state);
       if (keepGist && keepGist.token && !(S.gist && S.gist.token)) S.gist = keepGist;
       for (const p of data.photos || []) await idbPut("photos", null, p);
       save(); route(); toast("Backup restaurado ✔", "📂");
@@ -757,38 +784,116 @@
   }
 
   // GitHub Gist sync (the token never leaves this device except to api.github.com).
+  // Every sync pulls, merges and pushes, so what was done on the PC and on the iPad adds up instead of overwriting.
   const GIST_FILE = "rabisco-os-progresso.json";
-  function syncPayload() { const c = JSON.parse(JSON.stringify(S)); c.gist = { id: S.gist.id }; return JSON.stringify({ app: "rabisco-os", v: 1, state: c }); }
-  async function gistPush(quiet) {
-    const g = S.gist; if (!g.token) { if (!quiet) toast("Cole seu token do GitHub primeiro.", "🔑"); return; }
-    const body = { description: "Rabisco OS — progresso (sync)", files: { [GIST_FILE]: { content: syncPayload() } } };
-    const url = g.id ? `https://api.github.com/gists/${g.id}` : "https://api.github.com/gists";
-    const r = await fetch(url, { method: g.id ? "PATCH" : "POST", headers: { Authorization: `Bearer ${g.token}`, Accept: "application/vnd.github+json" }, body: JSON.stringify(g.id ? body : Object.assign(body, { public: false })) });
-    if (!r.ok) throw new Error(`GitHub respondeu ${r.status}`);
-    const j = await r.json();
-    S.gist.id = j.id; S.gist.lastSync = new Date().toISOString(); save(true);
-    if (!quiet) { toast("Progresso enviado pro seu Gist ⬆", "🌐"); route(); }
+  const LOCAL_ONLY = ["gist", "theme", "timerMin", "_photoCount"];
+  function syncPayload() { const c = JSON.parse(JSON.stringify(S)); LOCAL_ONLY.forEach((k) => delete c[k]); return JSON.stringify({ app: "rabisco-os", v: 1, state: c }); }
+  // Order-independent fingerprint of the synced part of a state.
+  function syncKey(s) {
+    const st = (v) => Array.isArray(v) ? "[" + v.map(st).join(",") + "]"
+      : v && typeof v === "object" ? "{" + Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => JSON.stringify(k) + ":" + st(v[k])).join(",") + "}"
+      : JSON.stringify(v);
+    const c = Object.assign({}, s); LOCAL_ONLY.concat("updatedAt").forEach((k) => delete c[k]);
+    return st(c);
   }
-  async function gistPull() {
-    const g = S.gist; if (!g.token || !g.id) return toast("Preencha token e ID do Gist.", "🔑");
-    const r = await fetch(`https://api.github.com/gists/${g.id}`, { headers: { Authorization: `Bearer ${g.token}`, Accept: "application/vnd.github+json" } });
+  function mergeState(a, b) { // a = this device, b = the Gist
+    const ma = a.mt || {}, mb = b.mt || {};
+    const timed = (k) => !!(ma[k] || mb[k]);
+    const newer = (k) => ((ma[k] || "") >= (mb[k] || "") ? a : b);
+    const minDate = (x, y) => (x && y ? (x < y ? x : y) : x || y);
+    const maxMap = (A, B) => { const o = Object.assign({}, B); for (const k in A || {}) o[k] = Math.max(A[k] || 0, o[k] || 0); return o; };
+    // Items edited since sync existed: newest edit wins (so un-marking sticks). Older items: union.
+    function map(name, prefix, combine) {
+      const A = a[name] || {}, B = b[name] || {}, out = {};
+      for (const k of new Set(Object.keys(A).concat(Object.keys(B)))) {
+        const v = timed(prefix + k) ? (newer(prefix + k)[name] || {})[k] : k in A && k in B ? combine(A[k], B[k]) : k in A ? A[k] : B[k];
+        if (v !== undefined) out[k] = v;
+      }
+      return out;
+    }
+    const out = Object.assign(defaultState(), b, a);
+    out.days = map("days", "day:", (x, y) => Object.assign({}, y, x, { done: x.done || y.done || undefined, note: x.note || y.note || undefined }));
+    out.ex = map("ex", "ex:", (x, y) => [!!(x[0] || y[0]), !!(x[1] || y[1])]);
+    out.lab = map("lab", "lab:", minDate);
+    out.badges = map("badges", "badge:", minDate);
+    out.activity = maxMap(a.activity, b.activity);
+    out.usedFreezes = Object.assign({}, b.usedFreezes, a.usedFreezes);
+    out.xpBy = maxMap(a.xpBy, b.xpBy);
+    out.xp = Object.values(out.xpBy).reduce((x, y) => x + y, 0);
+    out.name = timed("cfg:name") ? newer("cfg:name").name : a.name || b.name;
+    out.startDate = timed("cfg:startDate") ? newer("cfg:startDate").startDate : minDate(a.startDate, b.startDate);
+    out.freezes = timed("cfg:freezes") ? newer("cfg:freezes").freezes : Math.max(a.freezes, b.freezes);
+    ["_backedUp", "_night", "_early"].forEach((k) => { if (a[k] || b[k]) out[k] = true; });
+    out.mt = Object.assign({}, mb); for (const k in ma) if (ma[k] > (out.mt[k] || "")) out.mt[k] = ma[k];
+    out.createdAt = minDate(a.createdAt, b.createdAt);
+    return out;
+  }
+  async function gh(url, opt) {
+    const r = await fetch(url, Object.assign({ cache: "no-store" }, opt, { headers: { Authorization: `Bearer ${S.gist.token}`, Accept: "application/vnd.github+json" } }));
+    if (r.status === 401) throw new Error("O GitHub recusou o token (inválido ou expirado). Desconecte e cole um token novo.");
+    if (r.status === 403 || r.status === 404) { const e = new Error(`GitHub respondeu ${r.status}. Confira se o token tem a permissão “gist”.`); e.status = r.status; throw e; }
     if (!r.ok) throw new Error(`GitHub respondeu ${r.status}`);
-    const j = await r.json();
+    return r.json();
+  }
+  async function findGist() {
+    const list = await gh("https://api.github.com/gists?per_page=100");
+    const hit = list.filter((x) => x.files && x.files[GIST_FILE]).sort((x, y) => (y.updated_at > x.updated_at ? 1 : -1))[0];
+    return hit ? hit.id : "";
+  }
+  async function readGist(id) {
+    const j = await gh(`https://api.github.com/gists/${id}`);
     const f = j.files && j.files[GIST_FILE];
-    if (!f) throw new Error("gist sem o arquivo de progresso");
-    const content = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
-    const data = JSON.parse(content);
-    const remote = data.state;
-    if ((remote.updatedAt || "") < (S.updatedAt || "") && !confirm("O progresso deste aparelho parece mais novo que o do Gist. Substituir mesmo assim?")) return;
-    const keep = S.gist;
-    S = Object.assign(defaultState(), remote, { gist: Object.assign({}, keep, { lastSync: new Date().toISOString() }) });
-    save(true); route(); toast("Progresso baixado do Gist ⬇", "🌐");
+    if (!f) return null;
+    const data = JSON.parse(f.truncated ? await (await fetch(f.raw_url, { cache: "no-store" })).text() : f.content);
+    return data && data.app === "rabisco-os" && data.state ? fixState(data.state) : null;
   }
-  let syncT = null;
+  async function doSync() {
+    const g = S.gist;
+    if (!g.id) g.id = await findGist();
+    let remote = null;
+    if (g.id) {
+      try { remote = await readGist(g.id); }
+      catch (e) { if (e.status !== 404) throw e; g.id = await findGist(); remote = g.id ? await readGist(g.id) : null; }
+    }
+    const merged = remote ? mergeState(S, remote) : S;
+    const changed = syncKey(merged) !== syncKey(S);
+    if (changed) S = merged;
+    if (!remote || syncKey(merged) !== syncKey(remote)) {
+      const body = { description: "Rabisco OS — progresso (sync)", files: { [GIST_FILE]: { content: syncPayload() } } };
+      const j = await gh(g.id ? `https://api.github.com/gists/${g.id}` : "https://api.github.com/gists", { method: g.id ? "PATCH" : "POST", body: JSON.stringify(g.id ? body : Object.assign(body, { public: false })) });
+      S.gist.id = j.id;
+    }
+    S.gist.lastSync = new Date().toISOString();
+    save(true, true);
+    return changed;
+  }
+  let syncing = null, syncAgain = false, syncMsg = "", syncErr = "", syncT = null;
+  const syncTitle = () => (syncMsg === "erro" ? "Erro na sincronização: " + syncErr : S.gist.lastSync ? "Sincronizado em " + new Date(S.gist.lastSync).toLocaleString("pt-BR") : "Sincronização");
+  const isTyping = () => { const el = document.activeElement; return !!el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName); };
+  function syncNow(quiet) {
+    if (!S.gist.token) return Promise.resolve();
+    if (!navigator.onLine) { syncMsg = "offline"; renderChips(); return Promise.resolve(); }
+    if (syncing) { syncAgain = true; return syncing; }
+    clearTimeout(syncT); syncT = null;
+    syncMsg = "sync"; renderChips();
+    syncing = doSync().then((changed) => {
+      syncMsg = "ok"; syncErr = "";
+      if (changed) checkBadges();
+      if ((changed || !quiet) && !isTyping()) route();
+      if (!quiet) toast(changed ? "Sincronizado: chegou progresso de outro aparelho ✔" : "Tudo sincronizado ✔", "☁️");
+    }).catch((e) => {
+      syncMsg = "erro"; syncErr = e.message || String(e);
+      if (!quiet) { toast("Falha na sincronização: " + syncErr, "⚠️"); route(); }
+    }).finally(() => {
+      syncing = null; renderChips();
+      if (syncAgain) { syncAgain = false; syncNow(true); }
+    });
+    return syncing;
+  }
   function scheduleAutoSync() {
-    if (!S.gist || !S.gist.token || !S.gist.id || !navigator.onLine) return;
+    if (!S.gist || !S.gist.token) return;
     clearTimeout(syncT);
-    syncT = setTimeout(() => gistPush(true).catch(() => {}), 4000);
+    syncT = setTimeout(() => syncNow(true), 4000);
   }
 
   /* ---------------------------------------------------------------- actions */
@@ -796,6 +901,7 @@
     const e = S.ex[lid] || [false, false];
     e[i] = !e[i];
     S.ex[lid] = e;
+    touch("ex:" + lid);
     if (e[i]) {
       const L = LESSON_BY_ID[lid];
       logActivity(L ? exMinutes(L) : 15);
@@ -812,10 +918,11 @@
     }
     const prevStreak = streak();
     S.days[n] = Object.assign(S.days[n] || {}, { done: true, date: todayISO() });
+    touch("day:" + n);
     logActivity(D.type === "lesson" ? 1 : 30);
     addXP(D.type === "final" ? 365 : D.type === "boss" ? 100 : D.type === "week" ? 50 : 20, D.type === "lesson" ? `dia ${n} concluído` : "desafio vencido!");
     const st = streak();
-    if (st > prevStreak && st % 7 === 0 && S.freezes < 3) { S.freezes++; setTimeout(() => toast("Streak de " + st + " dias! Ganhou 1 cristal de gelo ❄️", "❄️"), 1200); }
+    if (st > prevStreak && st % 7 === 0 && S.freezes < 3) { S.freezes++; touch("cfg:freezes"); setTimeout(() => toast("Streak de " + st + " dias! Ganhou 1 cristal de gelo ❄️", "❄️"), 1200); }
     save(); checkBadges(); confetti();
     if (n === TOTAL_DAYS) setTimeout(() => modal("👑 365 DIAS!", `<p style="font-size:18px">Você completou a trilha inteira. Um ano de desenho, todo dia. Compare o desenho do dia 1 com o de hoje na Galeria. Isso é real, foi você que fez. 🌞🌙⭐</p>`), 800);
     route();
@@ -833,9 +940,9 @@
       if (t.dataset.scope === "lib") { const out = $("#libout"); if (out) { const open = $$("details.course[open] summary b").map((b) => b.textContent); out.innerHTML = libraryList([...new Set(COURSES.map((c) => c.cat))]); $$("details.course").forEach((d) => { if (open.includes($("summary b", d).textContent)) d.open = true; }); } }
       else route();
     }
-    else if (a === "toggle-lab") { const k = t.dataset.k; if (S.lab[k]) delete S.lab[k]; else { S.lab[k] = todayISO(); logActivity(30); addXP(15, "experimento do Lab"); } save(); checkBadges(); route(); }
+    else if (a === "toggle-lab") { const k = t.dataset.k; touch("lab:" + k); if (S.lab[k]) delete S.lab[k]; else { S.lab[k] = todayISO(); logActivity(30); addXP(15, "experimento do Lab"); } save(); checkBadges(); route(); }
     else if (a === "finish-day") finishDay(+t.dataset.n);
-    else if (a === "undo-day") { const n = +t.dataset.n; if (confirm("Desmarcar este dia?")) { delete S.days[n].done; save(); route(); } }
+    else if (a === "undo-day") { const n = +t.dataset.n; if (confirm("Desmarcar este dia?")) { delete S.days[n].done; touch("day:" + n); save(); route(); } }
     else if (a === "timer-start") {
       if (T.run) { T.run = false; clearInterval(T.h); t.textContent = "▶ Iniciar"; document.title = "Rabisco OS"; }
       else { if (!T.left) { T.total = T.left = S.timerMin * 60; } T.run = true; clearInterval(T.h); T.h = setInterval(tick, 1000); t.textContent = "⏸ Pausar"; }
@@ -844,22 +951,27 @@
     else if (a === "roll") { const d = $("#dice"); if (d) d.innerHTML = rollDice(); }
     else if (a === "export") doExport(false);
     else if (a === "export-full") doExport(true);
-    else if (a === "gist-push") { S.gist.token = $("#gist-token").value.trim(); S.gist.id = $("#gist-id").value.trim(); save(true); gistPush().catch((err) => toast("Falha no envio: " + err.message, "⚠️")); }
-    else if (a === "gist-pull") { S.gist.token = $("#gist-token").value.trim(); S.gist.id = $("#gist-id").value.trim(); save(true); gistPull().catch((err) => toast("Falha ao baixar: " + err.message, "⚠️")); }
+    else if (a === "gist-connect") {
+      const tok = $("#gist-token").value.trim();
+      if (!/^(ghp_|github_pat_|gho_)\w{20,}$/.test(tok)) { toast("Cole o token inteiro (começa com ghp_ ou github_pat_).", "🔑"); return; }
+      S.gist = { id: "", token: tok, lastSync: "" }; save(true, true); route(); syncNow(false);
+    }
+    else if (a === "gist-sync") syncNow(false);
+    else if (a === "gist-off") { if (confirm("Desconectar este aparelho da sincronização? O progresso continua salvo aqui.")) { S.gist = { id: "", token: "", lastSync: "" }; syncMsg = ""; save(); route(); } }
     else if (a === "del-photo") { if (confirm("Apagar esta imagem?")) idbDel("photos", t.dataset.id).then(fillGallery); }
     else if (a === "reset") { if (confirm("Isso apaga TODO o progresso deste aparelho. Tem certeza?") && confirm("Último aviso! Fez backup?")) { localStorage.removeItem(STORE_KEY); idbDel("kv", "state").finally(() => location.reload()); } }
   });
 
   document.addEventListener("input", (e) => {
     const t = e.target;
-    if (t.dataset.note) { const n = t.dataset.note; S.days[n] = Object.assign(S.days[n] || {}, { note: t.value }); clearTimeout(t._h); t._h = setTimeout(() => save(true), 500); }
+    if (t.dataset.note) { const n = t.dataset.note; S.days[n] = Object.assign(S.days[n] || {}, { note: t.value }); touch("day:" + n); clearTimeout(t._h); t._h = setTimeout(() => save(true), 500); }
     else if (t.id === "libq") { libQuery = t.value; clearTimeout(t._h); t._h = setTimeout(() => { $("#libout").innerHTML = libraryList([...new Set(COURSES.map((c) => c.cat))]); }, 200); }
-    else if (t.id === "cfg-name") { S.name = t.value.trim(); save(true); }
+    else if (t.id === "cfg-name") { S.name = t.value.trim(); touch("cfg:name"); save(true); }
   });
   document.addEventListener("change", (e) => {
     const t = e.target;
     if (t.id === "tmin") { S.timerMin = +t.value; T.left = 0; T.run = false; clearInterval(T.h); save(true); const l = $("#lcd"); if (l) l.textContent = fmtT(S.timerMin * 60); const b = $('[data-act="timer-start"]'); if (b) b.textContent = "▶ Iniciar"; }
-    else if (t.id === "cfg-start" && t.value) { S.startDate = t.value; save(); }
+    else if (t.id === "cfg-start" && t.value) { S.startDate = t.value; touch("cfg:startDate"); save(); }
     else if (t.id === "cfg-theme") { S.theme = t.value; applyTheme(); save(true); }
     else if (t.id === "imp" && t.files[0]) doImport(t.files[0]);
     else if (t.dataset.photo && t.files.length) addPhotos([...t.files], t.dataset.photo).catch((err) => toast("Erro na imagem: " + err.message, "⚠️"));
@@ -886,9 +998,13 @@
     route();
     checkBadges();
     if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("sw.js").catch(() => {});
-    window.addEventListener("online", scheduleAutoSync);
+    // Sync when the app opens, comes back to the front (iPad multitasking), goes to the background, and every 5 min while open.
+    window.addEventListener("online", () => syncNow(true));
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" || syncT) syncNow(true); });
+    setInterval(() => { if (document.visibilityState === "visible") syncNow(true); }, 5 * 60 * 1000);
+    setTimeout(() => syncNow(true), 600);
     // expose for debugging in the console
-    window.RabiscoOS = { PLAN, LESSONS, COURSES, state: () => S, missingEx };
+    window.RabiscoOS = { PLAN, LESSONS, COURSES, state: () => S, missingEx, mergeState, syncKey, fixState };
   }
   boot();
 })();

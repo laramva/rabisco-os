@@ -1,7 +1,8 @@
 /* Offline-first service worker: precache the app shell, cache everything else on first use. */
-const VERSION = "rabisco-os-v1.0.0";
+const VERSION = "rabisco-os-v1.1.0";
 const SHELL = [
   "./", "index.html", "styles.css", "app.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png",
+  "icon-maskable-512.png", "apple-touch-icon.png",
   "data/courses.js", "data/ex-fundamentos.js", "data/ex-semirrealista.js", "data/ex-cartoon.js", "data/ex-fad.js",
   "data/ex-tradicional.js", "data/ex-extras.js", "data/challenges.js", "data/lab.js", "data/tips.js",
 ];

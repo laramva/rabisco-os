@@ -350,22 +350,34 @@
     galeria: { ico: "🖼️", t: "Galeria", r: viewGallery },
     config: { ico: "💾", t: "Backup", r: viewConfig },
   };
+  let lastHash = null;
   function route() {
     const [name, arg] = (location.hash.slice(1) || "hoje").split("/");
     const main = $("#main");
+    const samePage = lastHash === location.hash, y = window.scrollY;
+    lastHash = location.hash;
     $$(".taskbar [data-go]").forEach((b) => b.setAttribute("aria-current", b.dataset.go === name || (name === "dia" && b.dataset.go === "trilha") ? "page" : "false"));
     if (name === "dia") main.innerHTML = viewDay(+arg || currentDay());
     else main.innerHTML = (ROUTES[name] || ROUTES.hoje).r(arg);
     renderChips();
     afterRender(name);
-    window.scrollTo({ top: 0, behavior: "instant" in window ? "instant" : "auto" });
+    // re-rendering the same page (marking an exercise, a sync) keeps the scroll position
+    window.scrollTo({ top: samePage ? y : 0, behavior: "instant" in window ? "instant" : "auto" });
   }
   window.addEventListener("hashchange", route);
 
   /* ---------------------------------------------------------------- views: today */
   function viewToday() {
     applyFreezes();
-    const n = currentDay();
+    // A day finished today stays on screen until tomorrow; an unfinished day stays (same exercises) until it is done.
+    const finishedToday = Object.keys(S.days).map(Number).filter((k) => S.days[k].done && S.days[k].date === todayISO()).sort((a, b) => b - a)[0];
+    const n = finishedToday || currentDay();
+    const st = S.days[n] || {};
+    if (!st.done && !st.seen) { S.days[n] = Object.assign(st, { seen: todayISO() }); save(true); }
+    const waiting = !st.done && st.seen && st.seen < todayISO()
+      ? `<div class="note" style="margin-bottom:12px">🔁 Este dia está te esperando (desde ${fmtDate(st.seen)}). Os exercícios e desafios continuam <b>os mesmos</b> até você concluir. Sem pressa, a trilha não pula nada.</div>` : "";
+    const next = finishedToday && currentDay() !== n
+      ? `<div class="note" style="margin-top:12px">✔ Dia ${n} concluído hoje! Amanhã aparece o próximo. Quer adiantar? <a class="btn sm lilac" href="#dia/${currentDay()}">Fazer o dia ${currentDay()} agora ▶</a></div>` : "";
     const calDay = Math.max(1, diffDays(S.startDate, todayISO()) + 1);
     const ahead = n - calDay;
     const lv = level();
@@ -388,7 +400,9 @@
               </div>
             </div>
             <hr class="hr">
+            ${waiting}
             ${dayBody(n)}
+            ${next}
           `, { icon: "☀️", menu: ["Arquivo", "Editar", "Exibir", "Ajuda"], status: [`Trilha: dia ${n}`, `Calendário: dia ${calDay}`, `${doneCount()} concluídos`] })}
         </div>
         <div>
@@ -441,9 +455,12 @@
           <h4>${esc(e[0])}</h4>
           <p>${esc(e[1])}</p>
           ${e[2] ? `<div class="tip">💡 ${esc(e[2])}</div>` : ""}
+          ${photoSlot(`ex:${l.id}:${i}`, "📸 Foto deste exercício")}
         </div>
       </div>`;
   }
+  // Photo button + thumbnails for one exercise / challenge / day (thumbnails are filled after render).
+  const photoSlot = (ref, label) => `<div class="ex-foot"><label class="btn sm pink">${label}<input type="file" accept="image/*" multiple data-photo="${esc(ref)}" hidden></label><div class="thumbs" data-thumbs="${esc(ref)}"></div></div>`;
   function lessonCard(l, scope) {
     return `<article class="lesson ${l.course.track === "B" ? "track-b" : ""} ${l.light ? "light" : ""}">
       <header>
@@ -465,6 +482,7 @@
         ${ch.steps && ch.steps.length ? `<ol>${ch.steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>` : ""}
         ${ch.tip ? `<div class="tip" style="font-size:13.5px;background:var(--butter);border-left:4px solid var(--butter-2);padding:6px 10px">💡 ${esc(ch.tip)}</div>` : ""}
         ${ch.ref ? `<p class="muted" style="margin-top:8px;font-size:13px">🔎 Referência: ${ch.ref}</p>` : ""}
+        ${photoSlot(`ch:${D.n}`, "📸 Foto do desafio")}
         ${recap}
       </div>
     </div>`;
@@ -483,7 +501,10 @@
         ${st.done
           ? `<span class="tag">✔ Concluído em ${fmtDate(st.date)}</span><button class="btn sm" data-act="undo-day" data-n="${n}">Desfazer</button>`
           : `<button class="btn mint" data-act="finish-day" data-n="${n}">✔ Concluir dia ${n}</button>`}
-        <label class="btn sm pink">📸 Foto do desenho<input type="file" accept="image/*" data-photo="${n}" hidden></label>
+      </div>
+      <div class="thumbs" data-thumbs="day:${n}" style="margin-top:8px"></div>
+      <div class="btn-row" style="margin-top:8px">
+        <label class="btn sm pink">📸 Foto extra do dia<input type="file" accept="image/*" multiple data-photo="day:${n}" hidden></label>
         <a class="btn sm" href="#dia/${Math.max(1, n - 1)}">◀ Dia ${Math.max(1, n - 1)}</a>
         <a class="btn sm" href="#dia/${Math.min(365, n + 1)}">Dia ${Math.min(365, n + 1)} ▶</a>
       </div>`;
@@ -652,7 +673,7 @@
     const exs = (m.ex || []).map((e, i) => {
       const k = m.id + ":" + i, done = !!S.lab[k];
       return `<div class="ex ${done ? "done" : ""}"><button class="pick" data-act="toggle-lab" data-k="${k}" aria-pressed="${done}" title="Marcar">${done ? "✓" : ""}</button>
-        <div><div class="meta">Experimento ${i + 1} · ~${e[3] || 30} min</div><h4>${esc(e[0])}</h4><p>${esc(e[1])}</p>${e[2] ? `<div class="tip">💡 ${esc(e[2])}</div>` : ""}</div></div>`;
+        <div><div class="meta">Experimento ${i + 1} · ~${e[3] || 30} min</div><h4>${esc(e[0])}</h4><p>${esc(e[1])}</p>${e[2] ? `<div class="tip">💡 ${esc(e[2])}</div>` : ""}${photoSlot("lab:" + k, "📸 Foto deste experimento")}</div></div>`;
     }).join("");
     return `<p><a class="btn sm" href="#lab">◀ Voltar ao Lab</a></p>
       ${win(m.title, `<p>${esc(m.intro)}</p>${m.tips ? `<h3>Princípios</h3><ul>${m.tips.map((t) => `<li>${esc(t)}</li>`).join("")}</ul>` : ""}`, { icon: m.icon })}
@@ -673,33 +694,136 @@
   }
 
   /* ---------------------------------------------------------------- views: gallery */
+  // Photos live in IndexedDB; keep one in-memory copy so thumbnails don't re-read the whole store on every render.
+  let PHOTOS = null;
+  const photos = async () => PHOTOS || (PHOTOS = (await idbAll("photos").catch(() => [])).sort((a, b) => (a.ts || 0) - (b.ts || 0)));
+  // ref: "ex:<lessonId>:<i>" | "lab:<module>:<i>" | "ch:<day>" | "day:<day>" | "" (avulso). Old photos only have `day`.
+  const photoRef = (p) => p.ref || (p.day ? "day:" + p.day : "");
+  function photoInfo(p) {
+    const [kind, a, b] = photoRef(p).split(":");
+    if (kind === "ex") { const l = LESSON_BY_ID[a], e = l && l.ex[+b]; return { group: "trilha", day: l && l.day, what: e ? `Exercício ${+b + 1}: ${e[0]}` : "Exercício", sub: l ? l.title : "" }; }
+    if (kind === "lab") { const m = (LAB.modules || []).find((x) => x.id === a), e = m && (m.ex || [])[+b]; return { group: "lab", mod: m, what: e ? `Experimento ${+b + 1}: ${e[0]}` : "Lab Cósmico", sub: m ? m.title : "" }; }
+    if (kind === "ch") { const D = PLAN[+a]; return { group: "trilha", day: +a, what: (D && D.ch && D.ch.t) || "Desafio", sub: "Desafio" }; }
+    if (kind === "day") return { group: "trilha", day: +a, what: "Desenho do dia", sub: "" };
+    return { group: p.kind === "mood" ? "mood" : "livre", what: p.kind === "mood" ? "Referência do moodboard" : "Desenho avulso", sub: "" };
+  }
+  const photoCaption = (p) => { const i = photoInfo(p); return [i.day ? `Dia ${i.day}` : "", i.what, fmtDate(p.date)].filter(Boolean).join(" · "); };
+
+  async function fillThumbs() {
+    const els = $$("[data-thumbs]"); if (!els.length) return;
+    const all = await photos();
+    els.forEach((el) => {
+      const list = all.filter((p) => photoRef(p) === el.dataset.thumbs);
+      el.innerHTML = list.map((p) => `<button class="thumb" data-view="${p.id}" data-set="${esc(el.dataset.thumbs)}" title="Ver em tela cheia"><img src="${p.data}" alt="${esc(photoCaption(p))}"></button>`).join("");
+    });
+  }
+
+  let galFilter = "tudo", galIds = [];
+  const GAL_FILTERS = [["tudo", "Tudo"], ["trilha", "🗺️ Trilha"], ["lab", "👾 Lab"], ["livre", "✏️ Avulsos"], ["mood", "🧷 Moodboard"]];
   function viewGallery() {
     return win("Galeria_da_Evolucao", `
-      <p>Guarde uma foto do desenho de cada dia. Fica <b>salvo só no seu aparelho</b> (offline) e entra no backup completo. Ver o dia 1 do lado do dia 100 é o melhor remédio contra a falta de motivação.</p>
-      <div class="btn-row" style="margin-bottom:14px"><label class="btn pink">📸 Adicionar desenho<input type="file" accept="image/*" multiple data-photo="free" hidden></label>
+      <p>Cada foto fica ligada ao exercício em que você a enviou. Toque numa foto para ver em <b>tela cheia</b>. As fotos ficam <b>salvas no aparelho</b> (offline) e entram no backup completo.</p>
+      <div class="btn-row" style="margin-bottom:12px"><label class="btn pink">📸 Adicionar desenho avulso<input type="file" accept="image/*" multiple data-photo="free" hidden></label>
       <label class="btn lilac">🧷 Adicionar referência ao moodboard<input type="file" accept="image/*" multiple data-photo="mood" hidden></label></div>
-      <h3>Meus desenhos</h3><div class="gal" id="gal-art"><p class="muted">Carregando...</p></div>
-      <h3 style="margin-top:20px">Moodboard (suas referências)</h3><p class="muted" style="font-size:13px">Suba aqui as referências que você ama (as do Pinterest, por exemplo). Elas aparecem só pra você.</p><div class="gal" id="gal-mood"></div>
-    `, { icon: "🖼️" });
+      <div class="btn-row gal-filter" role="tablist">${GAL_FILTERS.map(([k, t]) => `<button class="btn sm ${galFilter === k ? "lilac" : ""}" data-gf="${k}" role="tab" aria-selected="${galFilter === k}">${t}</button>`).join("")}</div>
+      <div id="gal-out"><p class="muted">Carregando...</p></div>
+    `, { icon: "🖼️", status: [`<span id="gal-count">…</span>`, "toque para ampliar"] });
   }
   async function fillGallery() {
-    const all = (await idbAll("photos").catch(() => [])).sort((a, b) => (b.ts || 0) - (a.ts || 0));
-    S._photoCount = all.filter((p) => p.kind !== "mood").length;
-    const card = (p) => `<div class="shot"><img src="${p.data}" alt="${esc(p.label || "")}" loading="lazy"><div><span>${p.day ? `dia ${p.day}` : fmtDate(p.date)}</span><button class="btn sm" data-act="del-photo" data-id="${p.id}" title="Apagar">×</button></div></div>`;
-    const art = all.filter((p) => p.kind !== "mood"), mood = all.filter((p) => p.kind === "mood");
-    if ($("#gal-art")) $("#gal-art").innerHTML = art.length ? art.map(card).join("") : `<div class="drop">Nenhum desenho ainda. O dia 1 te espera ✏️</div>`;
-    if ($("#gal-mood")) $("#gal-mood").innerHTML = mood.length ? mood.map(card).join("") : `<div class="drop">Moodboard vazio 🧷</div>`;
+    const out = $("#gal-out"); if (!out) return;
+    const all = await photos();
+    const art = all.filter((p) => p.kind !== "mood");
+    S._photoCount = art.length;
+    const cnt = $("#gal-count"); if (cnt) cnt.textContent = `${art.length} desenho(s) · ${new Set(art.map((p) => photoInfo(p).day).filter(Boolean)).size} dia(s) com foto`;
+    const shown = all.filter((p) => galFilter === "tudo" || photoInfo(p).group === galFilter).reverse(); // newest first
+    galIds = shown.map((p) => p.id);
+    const card = (p) => { const i = photoInfo(p); return `<figure class="shot"><button data-view="${p.id}" data-set="gal" title="Ver em tela cheia"><img src="${p.data}" alt="${esc(photoCaption(p))}" loading="lazy"></button><figcaption><b>${esc(i.what)}</b><span>${esc(fmtDate(p.date))}</span></figcaption></figure>`; };
+    const groups = [];
+    const byKey = new Map();
+    for (const p of shown) {
+      const i = photoInfo(p);
+      const key = i.group === "trilha" ? "d" + i.day : i.group === "lab" ? "m" + (i.mod ? i.mod.id : "") : i.group;
+      if (!byKey.has(key)) {
+        const D = i.day && PLAN[i.day];
+        const head = i.group === "trilha" ? `<a href="#dia/${i.day}">Dia ${i.day}</a> · ${D ? dayTitle(D) : ""}`
+          : i.group === "lab" ? `<a href="#lab/${i.mod ? i.mod.id : ""}">👾 ${esc(i.sub || "Lab Cósmico")}</a>`
+          : i.group === "mood" ? "🧷 Moodboard (suas referências)" : "✏️ Desenhos avulsos";
+        byKey.set(key, { head, items: [] }); groups.push(byKey.get(key));
+      }
+      byKey.get(key).items.push(p);
+    }
+    // Before × after: the first drawing next to the latest one.
+    const ba = art.length >= 2 && (galFilter === "tudo" || galFilter === "trilha")
+      ? `<div class="ba"><figure><button data-view="${art[0].id}" data-set="gal-ba"><img src="${art[0].data}" alt="primeiro desenho"></button><figcaption>✏️ Primeiro · ${esc(photoCaption(art[0]))}</figcaption></figure><figure><button data-view="${art[art.length - 1].id}" data-set="gal-ba"><img src="${art[art.length - 1].data}" alt="desenho mais recente"></button><figcaption>🌟 Mais recente · ${esc(photoCaption(art[art.length - 1]))}</figcaption></figure></div>` : "";
+    out.innerHTML = groups.length
+      ? `${ba ? `<h3>Antes × Depois</h3>${ba}` : ""}${groups.map((g) => `<h3 class="gal-h">${g.head} <span class="tag">${g.items.length}</span></h3><div class="gal">${g.items.map(card).join("")}</div>`).join("")}`
+      : `<div class="drop">${galFilter === "mood" ? "Moodboard vazio 🧷" : "Nenhum desenho aqui ainda. Use o botão 📸 em qualquer exercício ✏️"}</div>`;
   }
   async function addPhotos(files, tag) {
+    const [kind0, a, b] = tag.split(":");
+    const ref = ["ex", "lab", "ch", "day"].includes(kind0) ? tag : "";
+    const day = kind0 === "ex" ? (LESSON_BY_ID[a] || {}).day || null : kind0 === "ch" || kind0 === "day" ? +a : null;
     for (const f of files) {
-      const data = await shrink(f, 1400);
-      const kind = tag === "mood" ? "mood" : "art";
-      const day = /^\d+$/.test(tag) ? +tag : null;
-      await idbPut("photos", null, { id: Date.now() + "-" + Math.random().toString(36).slice(2, 7), kind, day, date: todayISO(), ts: Date.now(), label: f.name, data });
+      const data = await shrink(f, 1800);
+      await idbPut("photos", null, { id: Date.now() + "-" + Math.random().toString(36).slice(2, 7), kind: tag === "mood" ? "mood" : "art", ref, day, date: todayISO(), ts: Date.now(), label: f.name, data });
     }
-    await fillGallery().catch(() => {});
-    if (tag !== "mood") { const all = await idbAll("photos"); S._photoCount = all.filter((p) => p.kind !== "mood").length; checkBadges(); save(); }
-    toast(tag === "mood" ? "Referência salva no moodboard 🧷" : "Desenho guardado na galeria 📸", "🖼️");
+    PHOTOS = null;
+    // Sending the photo of an exercise also marks it as done.
+    let marked = false;
+    if (kind0 === "ex" && !(S.ex[a] || [])[+b]) { toggleEx(a, +b); marked = true; }
+    if (kind0 === "lab" && !S.lab[a + ":" + b]) { toggleLab(a + ":" + b); marked = true; }
+    if (tag !== "mood") { const all = await photos(); S._photoCount = all.filter((p) => p.kind !== "mood").length; checkBadges(); save(); }
+    if (marked) route(); else { fillThumbs(); fillGallery(); }
+    toast(tag === "mood" ? "Referência salva no moodboard 🧷" : marked ? "Foto guardada e exercício marcado como feito ✔" : "Desenho guardado na galeria 📸", "🖼️");
+  }
+
+  // Fullscreen viewer: swipe or arrows to move, double-tap or 🔍 for real size.
+  async function openViewer(id, set) {
+    const all = await photos();
+    const byId = new Map(all.map((p) => [p.id, p]));
+    let list = set === "gal" ? galIds.slice() : set === "gal-ba" ? [id] : all.filter((p) => photoRef(p) === set).map((p) => p.id);
+    list = list.filter((x) => byId.has(x)); if (!list.includes(id)) list = [id];
+    let i = list.indexOf(id);
+    const d = document.createElement("dialog");
+    d.className = "viewer";
+    d.innerHTML = `<div class="vbar"><span class="vcap"></span><span class="vpos"></span>
+        <button class="btn sm" data-v="zoom" title="Tamanho real">🔍</button><a class="btn sm" data-v="dl" title="Baixar">⬇</a>
+        <button class="btn sm" data-v="del" title="Apagar">🗑</button><button class="btn sm" data-v="close" title="Fechar">✕</button></div>
+      <div class="vstage"><img alt=""></div>
+      <button class="vnav prev" data-v="prev" aria-label="Anterior">‹</button><button class="vnav next" data-v="next" aria-label="Próxima">›</button>`;
+    document.body.appendChild(d);
+    const img = $("img", d), stage = $(".vstage", d);
+    const show = () => {
+      const p = byId.get(list[i]);
+      img.src = p.data; img.alt = photoCaption(p);
+      $(".vcap", d).textContent = photoCaption(p);
+      $(".vpos", d).textContent = list.length > 1 ? `${i + 1}/${list.length}` : "";
+      const dl = $('[data-v="dl"]', d); dl.href = p.data; dl.download = `rabisco-${p.day ? "dia-" + p.day : p.date}-${p.id.slice(-5)}.jpg`;
+      $$(".vnav", d).forEach((b) => (b.hidden = list.length < 2));
+      stage.classList.remove("zoom");
+    };
+    const go = (k) => { if (list.length > 1) { i = (i + k + list.length) % list.length; show(); } };
+    d.addEventListener("click", async (e) => {
+      const v = e.target.closest("[data-v]"); const a = v && v.dataset.v;
+      if (a === "close" || e.target === stage) d.close();
+      else if (a === "prev") go(-1);
+      else if (a === "next") go(1);
+      else if (a === "zoom") stage.classList.toggle("zoom");
+      else if (a === "del" && confirm("Apagar esta foto?")) {
+        await idbDel("photos", list[i]); PHOTOS = null; list.splice(i, 1);
+        fillThumbs(); fillGallery();
+        if (!list.length) d.close(); else { i = i % list.length; show(); }
+      }
+    });
+    img.addEventListener("dblclick", () => stage.classList.toggle("zoom"));
+    let x0 = null;
+    stage.addEventListener("touchstart", (e) => { x0 = e.touches.length === 1 ? e.touches[0].clientX : null; }, { passive: true });
+    stage.addEventListener("touchend", (e) => { if (x0 == null || stage.classList.contains("zoom")) return; const dx = e.changedTouches[0].clientX - x0; if (Math.abs(dx) > 50) go(dx < 0 ? 1 : -1); x0 = null; });
+    d.addEventListener("keydown", (e) => { if (e.key === "ArrowRight") go(1); if (e.key === "ArrowLeft") go(-1); });
+    d.addEventListener("close", () => { d.remove(); document.documentElement.style.overflow = ""; });
+    show();
+    document.documentElement.style.overflow = "hidden"; // the page behind must not scroll
+    d.showModal();
   }
   function shrink(file, max) {
     return new Promise((res, rej) => {
@@ -779,6 +903,7 @@
       S = fixState(data.state);
       if (keepGist && keepGist.token && !(S.gist && S.gist.token)) S.gist = keepGist;
       for (const p of data.photos || []) await idbPut("photos", null, p);
+      PHOTOS = null;
       save(); route(); toast("Backup restaurado ✔", "📂");
     } catch (e) { toast("Não consegui restaurar: " + e.message, "⚠️"); }
   }
@@ -910,6 +1035,12 @@
     }
     save(); checkBadges();
   }
+  function toggleLab(k) {
+    touch("lab:" + k);
+    if (S.lab[k]) delete S.lab[k];
+    else { S.lab[k] = todayISO(); logActivity(30); addXP(15, "experimento do Lab"); }
+    save(); checkBadges();
+  }
   function finishDay(n) {
     const D = PLAN[n];
     if (D.type === "lesson") {
@@ -929,8 +1060,10 @@
   }
 
   document.addEventListener("click", (e) => {
-    const t = e.target.closest("[data-act],[data-go],[data-go-day]");
-    if (!t) return;
+    const t = e.target.closest("[data-act],[data-go],[data-go-day],[data-view],[data-gf]");
+    if (!t || t.closest("dialog.viewer")) return;
+    if (t.dataset.view) { openViewer(t.dataset.view, t.dataset.set); return; }
+    if (t.dataset.gf) { galFilter = t.dataset.gf; route(); return; }
     if (t.dataset.go) { location.hash = t.dataset.go; return; }
     if (t.dataset.goDay) { location.hash = "dia/" + t.dataset.goDay; return; }
     const a = t.dataset.act;
@@ -940,7 +1073,7 @@
       if (t.dataset.scope === "lib") { const out = $("#libout"); if (out) { const open = $$("details.course[open] summary b").map((b) => b.textContent); out.innerHTML = libraryList([...new Set(COURSES.map((c) => c.cat))]); $$("details.course").forEach((d) => { if (open.includes($("summary b", d).textContent)) d.open = true; }); } }
       else route();
     }
-    else if (a === "toggle-lab") { const k = t.dataset.k; touch("lab:" + k); if (S.lab[k]) delete S.lab[k]; else { S.lab[k] = todayISO(); logActivity(30); addXP(15, "experimento do Lab"); } save(); checkBadges(); route(); }
+    else if (a === "toggle-lab") { toggleLab(t.dataset.k); route(); }
     else if (a === "finish-day") finishDay(+t.dataset.n);
     else if (a === "undo-day") { const n = +t.dataset.n; if (confirm("Desmarcar este dia?")) { delete S.days[n].done; touch("day:" + n); save(); route(); } }
     else if (a === "timer-start") {
@@ -958,7 +1091,6 @@
     }
     else if (a === "gist-sync") syncNow(false);
     else if (a === "gist-off") { if (confirm("Desconectar este aparelho da sincronização? O progresso continua salvo aqui.")) { S.gist = { id: "", token: "", lastSync: "" }; syncMsg = ""; save(); route(); } }
-    else if (a === "del-photo") { if (confirm("Apagar esta imagem?")) idbDel("photos", t.dataset.id).then(fillGallery); }
     else if (a === "reset") { if (confirm("Isso apaga TODO o progresso deste aparelho. Tem certeza?") && confirm("Último aviso! Fez backup?")) { localStorage.removeItem(STORE_KEY); idbDel("kv", "state").finally(() => location.reload()); } }
   });
 
@@ -974,11 +1106,12 @@
     else if (t.id === "cfg-start" && t.value) { S.startDate = t.value; touch("cfg:startDate"); save(); }
     else if (t.id === "cfg-theme") { S.theme = t.value; applyTheme(); save(true); }
     else if (t.id === "imp" && t.files[0]) doImport(t.files[0]);
-    else if (t.dataset.photo && t.files.length) addPhotos([...t.files], t.dataset.photo).catch((err) => toast("Erro na imagem: " + err.message, "⚠️"));
+    else if (t.dataset.photo && t.files.length) { const fs = [...t.files]; t.value = ""; addPhotos(fs, t.dataset.photo).catch((err) => toast("Erro na imagem: " + (err.message || "formato não suportado"), "⚠️")); }
   });
 
   function afterRender(name) {
     if (name === "galeria") fillGallery();
+    fillThumbs();
     if (T.run) { const b = $('[data-act="timer-start"]'); if (b) b.textContent = "⏸ Pausar"; const l = $("#lcd"); if (l) l.textContent = fmtT(T.left); }
   }
   function applyTheme() {

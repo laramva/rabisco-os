@@ -242,10 +242,39 @@ label.field > input, label.field > select, label.field > textarea { display: blo
 .artist b { font-family: var(--font-body); }
 
 /* ===== Gallery ===== */
-.gal { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
-.gal .shot { border: 2px solid var(--ink); background: var(--paper); box-shadow: 3px 3px 0 var(--ink); }
-.gal .shot img { aspect-ratio: 1; object-fit: cover; width: 100%; border-bottom: 2px solid var(--ink); }
-.gal .shot div { font-family: var(--font-mono); font-size: 15px; padding: 2px 8px; display: flex; justify-content: space-between; gap: 6px; }
+/* masonry columns: every drawing keeps its own proportions, nothing is cropped */
+.gal { columns: 190px auto; column-gap: 12px; }
+.gal .shot { break-inside: avoid; margin: 0 0 12px; border: 2px solid var(--ink); background: var(--paper); box-shadow: 3px 3px 0 var(--ink); }
+.gal .shot > button, .ba figure > button { display: block; width: 100%; padding: 0; border: 0; background: var(--paper); cursor: zoom-in; }
+.gal .shot img { display: block; width: 100%; height: auto; border-bottom: 2px solid var(--ink); }
+.gal .shot figcaption { font-size: 12.5px; line-height: 1.3; padding: 5px 8px 6px; display: flex; flex-direction: column; gap: 2px; }
+.gal .shot figcaption span { font-family: var(--font-mono); font-size: 14px; color: var(--muted); }
+.gal-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 18px 0 10px; font-size: 15px; }
+.gal-filter { margin-bottom: 14px; }
+.ba { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px; }
+.ba figure { margin: 0; border: 2px solid var(--ink); background: var(--paper); box-shadow: 3px 3px 0 var(--ink); display: flex; flex-direction: column; }
+.ba img { display: block; width: 100%; height: 260px; object-fit: contain; background: var(--paper); border-bottom: 2px solid var(--ink); }
+.ba figcaption { font-family: var(--font-mono); font-size: 14px; padding: 4px 8px; }
+/* photo slot under each exercise */
+.ex-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.thumbs { display: flex; gap: 6px; flex-wrap: wrap; }
+.thumbs:empty { display: none; }
+.thumb { width: 64px; height: 64px; padding: 0; border: 2px solid var(--ink); background: var(--paper); box-shadow: 2px 2px 0 var(--ink); cursor: zoom-in; }
+.thumb img { display: block; width: 100%; height: 100%; object-fit: contain; }
+/* fullscreen viewer */
+dialog.viewer { position: fixed; inset: 0; max-width: none; max-height: none; width: 100vw; height: 100vh; height: 100dvh; margin: 0; background: rgba(20, 16, 28, .97); color: #fff; overflow: hidden; }
+dialog.viewer::backdrop { background: rgba(20, 16, 28, .97); }
+.viewer .vbar { position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; align-items: center; gap: 6px; padding: calc(8px + env(safe-area-inset-top, 0px)) max(10px, env(safe-area-inset-right, 0px)) 8px max(10px, env(safe-area-inset-left, 0px)); background: rgba(20, 16, 28, .85); }
+.viewer .vcap { flex: 1; min-width: 0; font-size: 13.5px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.viewer .vpos { font-family: var(--font-mono); font-size: 16px; opacity: .8; }
+.viewer .vstage { position: absolute; inset: calc(56px + env(safe-area-inset-top, 0px)) 0 env(safe-area-inset-bottom, 0px) 0; display: flex; align-items: center; justify-content: center; overflow: auto; -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y pinch-zoom; }
+.viewer .vstage img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; user-select: none; -webkit-user-select: none; }
+.viewer .vstage.zoom { display: block; }
+.viewer .vstage.zoom img { max-width: none; max-height: none; cursor: zoom-out; }
+.viewer .vnav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 48px; height: 64px; border: 2px solid var(--ink); background: var(--chrome); color: var(--ink); font-size: 34px; line-height: 1; box-shadow: 3px 3px 0 var(--ink); }
+.viewer .vnav.prev { left: max(8px, env(safe-area-inset-left, 0px)); }
+.viewer .vnav.next { right: max(8px, env(safe-area-inset-right, 0px)); }
+.viewer .vnav[hidden] { display: none; }
 .drop { border: 2px dashed var(--ink-2); padding: 18px; text-align: center; font-family: var(--font-mono); font-size: 18px; background: var(--paper); }
 
 /* ===== Badges ===== */

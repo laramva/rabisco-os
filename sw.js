@@ -1,5 +1,5 @@
 /* Offline-first service worker: precache the app shell, cache everything else on first use. */
-const VERSION = "rabisco-os-v1.2.0";
+const VERSION = "rabisco-os-v1.3.0";
 const SHELL = [
   "./", "index.html", "styles.css", "app.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png",
   "icon-maskable-512.png", "apple-touch-icon.png",

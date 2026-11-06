@@ -6,6 +6,7 @@
   const LESSON_URL = "https://app.ilustraacademy.com/courses/l/";
   const STORE_KEY = "rabisco-os-v1";
   const TOTAL_DAYS = 365;
+  const APP_VERSION = "1.3"; // bump together with VERSION in sw.js on every publish, so installed apps update themselves
 
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -1130,7 +1131,28 @@
     clock(); setInterval(clock, 15000);
     route();
     checkBadges();
-    if ("serviceWorker" in navigator && location.protocol !== "file:") navigator.serviceWorker.register("sw.js").catch(() => {});
+    $(".logo span").textContent = "365 dias de desenho · v" + APP_VERSION;
+    // Updates install by themselves: check when the app opens or comes back to the front, then reload
+    // into the new version as soon as that won't interrupt anything (not typing, timer stopped).
+    if ("serviceWorker" in navigator && location.protocol !== "file:") {
+      const hadSW = !!navigator.serviceWorker.controller;
+      let pending = false;
+      const reloadNow = () => {
+        if (!pending || isTyping() || T.run) return;
+        pending = false;
+        try { sessionStorage.setItem("rabisco-updated", "1"); } catch (e) {}
+        location.reload();
+      };
+      navigator.serviceWorker.addEventListener("controllerchange", () => { if (!hadSW) return; pending = true; save(true, true); reloadNow(); });
+      setInterval(reloadNow, 15000);
+      navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((reg) => {
+        const check = () => { if (document.visibilityState === "visible" && navigator.onLine) reg.update().catch(() => {}); };
+        document.addEventListener("visibilitychange", () => { check(); reloadNow(); });
+        window.addEventListener("online", check);
+        setInterval(check, 30 * 60 * 1000);
+      }).catch(() => {});
+      try { if (sessionStorage.getItem("rabisco-updated")) { sessionStorage.removeItem("rabisco-updated"); setTimeout(() => toast(`Rabisco OS atualizado para a v${APP_VERSION} ✨`, "💾"), 700); } } catch (e) {}
+    }
     // Sync when the app opens, comes back to the front (iPad multitasking), goes to the background, and every 5 min while open.
     window.addEventListener("online", () => syncNow(true));
     document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" || syncT) syncNow(true); });

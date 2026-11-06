@@ -6,7 +6,7 @@
   const LESSON_URL = "https://app.ilustraacademy.com/courses/l/";
   const STORE_KEY = "rabisco-os-v1";
   const TOTAL_DAYS = 365;
-  const APP_VERSION = "1.3"; // bump together with VERSION in sw.js on every publish, so installed apps update themselves
+  const APP_VERSION = "1.4"; // bump together with VERSION in sw.js on every publish, so installed apps update themselves
 
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -119,7 +119,8 @@
     gist: { id: "", token: "", lastSync: "" },
     timerMin: 30,
     xpBy: {},          // deviceId -> XP earned on that device (sync adds them up)
-    mt: {},            // "ex:<id>" / "day:<n>" / "lab:<k>" / "cfg:<field>" -> last change, so sync keeps the newest edit
+    mt: {},            // "ex:<id>" / "day:<n>" / "lab:<k>" / "cfg:<field>" / "photo:<id>" -> last change, so sync keeps the newest edit
+    photoIdx: {},      // photoId -> {g: gist holding the photo, kind, day, ts} | {del: true, g, gone} once deleted
   });
 
   // Random id for this browser, kept outside the synced state.
@@ -338,7 +339,7 @@
       <span class="chip ice" title="Cristais de gelo: protegem sua streak se você perder um dia">❄️ ${S.freezes}</span>
       <span class="chip xp" title="${esc(lv.name)}">⭐ Nv ${lv.i} · ${S.xp} XP</span>
       <span class="chip" title="Dias concluídos">📅 ${doneCount()}/365</span>
-      ${S.gist.token ? `<span class="chip" data-go="config" role="button" title="${esc(syncTitle())}">${{ sync: "☁️ …", ok: "☁️ ✔", erro: "☁️ ⚠️", offline: "☁️ off" }[syncMsg] || "☁️"}</span>` : ""}`;
+      ${S.gist.token ? `<span class="chip" data-go="config" role="button" title="${esc(syncTitle())}">${{ sync: "☁️ …", ok: "☁️ ✔", erro: "☁️ ⚠️", offline: "☁️ off" }[syncMsg] || "☁️"}${photoLeft ? ` 📸${photoLeft}` : ""}</span>` : ""}`;
   }
 
   /* ---------------------------------------------------------------- routes */
@@ -811,7 +812,9 @@
       else if (a === "next") go(1);
       else if (a === "zoom") stage.classList.toggle("zoom");
       else if (a === "del" && confirm("Apagar esta foto?")) {
-        await idbDel("photos", list[i]); PHOTOS = null; list.splice(i, 1);
+        const pid = list[i], pe = S.photoIdx[pid];
+        await idbDel("photos", pid); PHOTOS = null; list.splice(i, 1);
+        S.photoIdx[pid] = { del: true, g: pe && pe.g }; touch("photo:" + pid); save(true); // other devices delete it too
         fillThumbs(); fillGallery();
         if (!list.length) d.close(); else { i = i % list.length; show(); }
       }
@@ -864,7 +867,7 @@
         <p>Este aparelho está <b>conectado</b>. O progresso sincroniza sozinho quando você abre o app, a cada exercício marcado e quando sai dele. O que você fizer no PC e no iPad é <b>somado</b>, nada é apagado.</p>
         ${syncMsg === "erro" ? `<div class="note warn">⚠️ ${esc(syncErr)}</div>` : `<div class="note">${syncMsg === "sync" ? "☁️ Sincronizando…" : g.lastSync ? "✔ Última sincronização: " + new Date(g.lastSync).toLocaleString("pt-BR") : "☁️ Conectando…"}</div>`}
         <div class="btn-row" style="margin-top:10px"><button class="btn lilac" data-act="gist-sync">🔄 Sincronizar agora</button><button class="btn sm" data-act="gist-off">Desconectar este aparelho</button></div>
-        <p class="muted" style="font-size:13px;margin-top:10px">Pra conectar outro aparelho, abra o Rabisco OS nele, vá em 💾 Backup e cole um token (pode ser o mesmo ou um novo). As fotos da Galeria não sincronizam: ficam no aparelho e vão no backup completo.</p>` : `
+        <p class="muted" style="font-size:13px;margin-top:10px">Pra conectar outro aparelho, abra o Rabisco OS nele, vá em 💾 Backup e cole um token (pode ser o mesmo ou um novo). As <b>fotos também sincronizam</b> (cada uma num gist secreto seu); na primeira vez pode levar alguns minutos, o ☁️ 📸 no topo mostra quantas faltam.</p>` : `
         <p>Use no <b>PC, iPad e celular</b> com o mesmo progresso, via um <b>Gist secreto</b> da sua conta GitHub (grátis). Faça isto <b>uma vez em cada aparelho</b>:</p>
         <ol style="font-size:13.5px;padding-left:20px">
           <li><a class="btn sm mint" href="https://github.com/settings/tokens/new?scopes=gist&amp;description=Rabisco%20OS" target="_blank" rel="noopener">🔑 Criar token no GitHub</a><br>Em <i>Expiration</i> escolha <b>No expiration</b>, deixe marcada só a caixa <b>gist</b> e clique em <i>Generate token</i>.</li>
@@ -942,6 +945,7 @@
     out.ex = map("ex", "ex:", (x, y) => [!!(x[0] || y[0]), !!(x[1] || y[1])]);
     out.lab = map("lab", "lab:", minDate);
     out.badges = map("badges", "badge:", minDate);
+    out.photoIdx = map("photoIdx", "photo:", (x, y) => Object.assign({}, y, x, { g: x.g || y.g }));
     out.activity = maxMap(a.activity, b.activity);
     out.usedFreezes = Object.assign({}, b.usedFreezes, a.usedFreezes);
     out.xpBy = maxMap(a.xpBy, b.xpBy);
@@ -958,13 +962,66 @@
     const r = await fetch(url, Object.assign({ cache: "no-store" }, opt, { headers: { Authorization: `Bearer ${S.gist.token}`, Accept: "application/vnd.github+json" } }));
     if (r.status === 401) throw new Error("O GitHub recusou o token (inválido ou expirado). Desconecte e cole um token novo.");
     if (r.status === 403 || r.status === 404) { const e = new Error(`GitHub respondeu ${r.status}. Confira se o token tem a permissão “gist”.`); e.status = r.status; throw e; }
+    if (r.status === 429 || r.status === 422) { const e = new Error(`GitHub respondeu ${r.status}`); e.status = r.status; throw e; }
     if (!r.ok) throw new Error(`GitHub respondeu ${r.status}`);
-    return r.json();
+    return r.status === 204 ? null : r.json();
   }
   async function findGist() {
-    const list = await gh("https://api.github.com/gists?per_page=100");
-    const hit = list.filter((x) => x.files && x.files[GIST_FILE]).sort((x, y) => (y.updated_at > x.updated_at ? 1 : -1))[0];
-    return hit ? hit.id : "";
+    // the progress gist can sit behind many photo gists, so walk the pages
+    for (let page = 1; page <= 30; page++) {
+      const list = await gh(`https://api.github.com/gists?per_page=100&page=${page}`);
+      const hit = list.filter((x) => x.files && x.files[GIST_FILE]).sort((x, y) => (y.updated_at > x.updated_at ? 1 : -1))[0];
+      if (hit) return hit.id;
+      if (list.length < 100) break;
+    }
+    return "";
+  }
+
+  // Photos sync one secret gist per photo; the progress gist only carries the index (S.photoIdx).
+  const PHOTO_FILE = "rabisco-os-foto.json";
+  let photoSyncing = false, photoLeft = 0;
+  async function syncPhotos() {
+    if (photoSyncing || !S.gist.token || !navigator.onLine) return false;
+    photoSyncing = true;
+    let changed = false;
+    try {
+      const have = new Set((await photos()).map((p) => p.id));
+      const idx = S.photoIdx;
+      // deleted on another device
+      for (const [id, e] of Object.entries(idx)) if (e.del && have.has(id)) { await idbDel("photos", id); PHOTOS = null; changed = true; }
+      const up = (await photos()).filter((p) => !(idx[p.id] && (idx[p.id].g || idx[p.id].del)));
+      const down = Object.entries(idx).filter(([id, e]) => !e.del && e.g && !have.has(id));
+      photoLeft = up.length + down.length; renderChips();
+      for (const p of up) {
+        const j = await gh("https://api.github.com/gists", { method: "POST", body: JSON.stringify({ description: "Rabisco OS — foto (sync)", public: false, files: { [PHOTO_FILE]: { content: JSON.stringify({ app: "rabisco-os-foto", v: 1, photo: p }) } } }) });
+        S.photoIdx[p.id] = { g: j.id, kind: p.kind, day: p.day || null, ts: p.ts };
+        save(true); photoLeft--; renderChips();
+      }
+      for (const [id, e] of down) {
+        try {
+          const j = await gh(`https://api.github.com/gists/${e.g}`);
+          const f = j.files && j.files[PHOTO_FILE];
+          const data = f && JSON.parse(f.truncated ? await (await fetch(f.raw_url, { cache: "no-store" })).text() : f.content);
+          if (data && data.photo && data.photo.data) { await idbPut("photos", null, data.photo); PHOTOS = null; changed = true; }
+        } catch (err) {
+          if (err.status !== 404) throw err;
+          S.photoIdx[id] = { del: true }; touch("photo:" + id); save(true);
+        }
+        photoLeft--; renderChips();
+      }
+      // remove the cloud copy of photos deleted here or elsewhere
+      for (const [id, e] of Object.entries(S.photoIdx)) {
+        if (!e.del || e.gone || !e.g) continue;
+        try { await gh(`https://api.github.com/gists/${e.g}`, { method: "DELETE" }); } catch (err) { if (err.status !== 404) continue; }
+        S.photoIdx[id] = { del: true, g: e.g, gone: true }; save(true);
+      }
+    } catch (err) {
+      console.warn("photo sync", err); // retried on the next sync (rate limits, offline...)
+    } finally {
+      photoSyncing = false; photoLeft = 0; renderChips();
+    }
+    if (changed) { const all = await photos(); S._photoCount = all.filter((p) => p.kind !== "mood").length; checkBadges(); fillThumbs(); fillGallery(); }
+    return changed;
   }
   async function readGist(id) {
     const j = await gh(`https://api.github.com/gists/${id}`);
@@ -1005,6 +1062,7 @@
     syncing = doSync().then((changed) => {
       syncMsg = "ok"; syncErr = "";
       if (changed) checkBadges();
+      syncPhotos();
       if ((changed || !quiet) && !isTyping()) route();
       if (!quiet) toast(changed ? "Sincronizado: chegou progresso de outro aparelho ✔" : "Tudo sincronizado ✔", "☁️");
     }).catch((e) => {
@@ -1159,7 +1217,7 @@
     setInterval(() => { if (document.visibilityState === "visible") syncNow(true); }, 5 * 60 * 1000);
     setTimeout(() => syncNow(true), 600);
     // expose for debugging in the console
-    window.RabiscoOS = { PLAN, LESSONS, COURSES, state: () => S, missingEx, mergeState, syncKey, fixState };
+    window.RabiscoOS = { PLAN, LESSONS, COURSES, state: () => S, missingEx, mergeState, syncKey, fixState, syncNow, dropPhotoCache: () => (PHOTOS = null) };
   }
   boot();
 })();

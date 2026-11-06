@@ -337,3 +337,16 @@ kbd { font-family: var(--font-mono); font-size: 16px; border: 1.5px solid var(--
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 @media print { .taskbar, .topbar .chips, .btn { display: none !important; } body { background: #fff; } }
+.devs li { padding: 8px 0; border-top: 1.5px dashed var(--chrome-lo); }
+.devs li:first-child { border-top: 0; }
+.devs .btn { margin-left: 4px; }
+/* account window */
+.acct .field input { width: 100%; font-family: var(--font-body); font-size: 16px; } /* 16px: iPad/iPhone don't zoom in on focus */
+.acct-tabs { margin-bottom: 10px; }
+.acct-intro { font-size: 14px; margin: 0 0 10px; }
+.pw-row { display: flex; gap: 6px; align-items: stretch; margin-top: 4px; }
+.pw-row input { flex: 1; min-width: 0; }
+.acct-err { margin: 8px 0; }
+.acct [hidden] { display: none !important; }
+.chip.login { cursor: pointer; background: var(--mint, #c8ebe1); }
+.acct-nudge .btn { margin-left: 6px; vertical-align: middle; }

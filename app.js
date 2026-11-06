@@ -6,7 +6,7 @@
   const LESSON_URL = "https://app.ilustraacademy.com/courses/l/";
   const STORE_KEY = "rabisco-os-v1";
   const TOTAL_DAYS = 365;
-  const APP_VERSION = "1.4"; // bump together with VERSION in sw.js on every publish, so installed apps update themselves
+  const APP_VERSION = "1.7"; // bump together with VERSION in sw.js on every publish, so installed apps update themselves
 
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -120,7 +120,8 @@
     timerMin: 30,
     xpBy: {},          // deviceId -> XP earned on that device (sync adds them up)
     mt: {},            // "ex:<id>" / "day:<n>" / "lab:<k>" / "cfg:<field>" / "photo:<id>" -> last change, so sync keeps the newest edit
-    photoIdx: {},      // photoId -> {g: gist holding the photo, kind, day, ts} | {del: true, g, gone} once deleted
+    photoIdx: {},      // photoId -> {c: 1 once saved in the account, kind, day, ts} | {del: true, gone} once deleted (g: old Gist copy)
+    devices: {},       // deviceId -> {kind, app, ver, fp, photos, at}: what each device had at its last sync
   });
 
   // Random id for this browser, kept outside the synced state.
@@ -339,7 +340,8 @@
       <span class="chip ice" title="Cristais de gelo: protegem sua streak se você perder um dia">❄️ ${S.freezes}</span>
       <span class="chip xp" title="${esc(lv.name)}">⭐ Nv ${lv.i} · ${S.xp} XP</span>
       <span class="chip" title="Dias concluídos">📅 ${doneCount()}/365</span>
-      ${S.gist.token ? `<span class="chip" data-go="config" role="button" title="${esc(syncTitle())}">${{ sync: "☁️ …", ok: "☁️ ✔", erro: "☁️ ⚠️", offline: "☁️ off" }[syncMsg] || "☁️"}${photoLeft ? ` 📸${photoLeft}` : ""}</span>` : ""}`;
+      ${signedIn() ? `<span class="chip" data-go="config" role="button" title="${esc(syncTitle())}">${{ sync: "☁️ …", ok: syncHealth().ok ? "☁️ ✔✔" : "☁️ ✔", erro: "☁️ ⚠️", offline: "☁️ off" }[syncMsg] || "☁️"}${photoLeft ? ` 📸${photoLeft}` : ""}</span>`
+        : `<span class="chip login" data-act="login" role="button" title="Entre ou crie sua conta para salvar na nuvem e usar em qualquer aparelho">👤 Entrar</span>`}`;
   }
 
   /* ---------------------------------------------------------------- routes */
@@ -350,7 +352,7 @@
     lab: { ico: "👾", t: "Lab Cósmico", r: viewLab },
     desafios: { ico: "🏆", t: "Conquistas", r: viewBadges },
     galeria: { ico: "🖼️", t: "Galeria", r: viewGallery },
-    config: { ico: "💾", t: "Backup", r: viewConfig },
+    config: { ico: "👤", t: "Conta", r: viewConfig },
   };
   let lastHash = null;
   function route() {
@@ -402,6 +404,7 @@
               </div>
             </div>
             <hr class="hr">
+            ${signedIn() ? "" : `<div class="note acct-nudge" style="margin-bottom:12px">☁️ <b>${sessionLost ? "Sua sessão expirou." : "Use em qualquer aparelho:"}</b> ${sessionLost ? "Entre de novo para continuar sincronizando." : "crie sua conta grátis (e-mail e senha) e seu progresso e suas fotos ficam salvos na nuvem."} <button class="btn sm mint" data-act="login" data-mode="${sessionLost || lastEmail() ? "in" : "up"}">${sessionLost || lastEmail() ? "👤 Entrar" : "✨ Criar conta"}</button></div>`}
             ${waiting}
             ${dayBody(n)}
             ${next}
@@ -832,50 +835,51 @@
   function shrink(file, max) {
     return new Promise((res, rej) => {
       const fr = new FileReader();
-      fr.onload = () => {
-        const img = new Image();
-        img.onload = () => {
-          const k = Math.min(1, max / Math.max(img.width, img.height));
-          const c = document.createElement("canvas");
-          c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
-          c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-          res(c.toDataURL("image/jpeg", 0.85));
-        };
-        img.onerror = rej;
-        img.src = fr.result;
-      };
+      fr.onload = () => drawScaled(fr.result, max, 0.85).then(res, rej);
       fr.onerror = rej;
       fr.readAsDataURL(file);
+    });
+  }
+  function drawScaled(src, max, quality) {
+    return new Promise((res, rej) => {
+      const img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        res(c.toDataURL("image/jpeg", quality));
+      };
+      img.onerror = rej;
+      img.src = src;
     });
   }
 
   /* ---------------------------------------------------------------- views: config / backup / sync */
   function viewConfig() {
-    const g = S.gist || {};
+    const acct = signedIn() ? `
+        <p>Você está na conta <b>${esc(AUTH.email)}</b>. Progresso e fotos ficam salvos nela e sincronizam sozinhos: quando você abre o app, a cada exercício marcado e quando sai dele. O que você faz em cada aparelho é <b>somado</b>, nada é apagado.</p>
+        ${syncMsg === "erro" ? `<div class="note warn">⚠️ ${esc(syncErr)}</div>` : `<div class="note">${syncMsg === "sync" ? "☁️ Sincronizando…" : syncMsg === "offline" ? "☁️ Sem internet agora: o que você fizer fica guardado e sobe sozinho quando a internet voltar." : AUTH.lastSync ? "☁️ Última sincronização deste aparelho: " + new Date(AUTH.lastSync).toLocaleString("pt-BR") : "☁️ Conectando…"}${photoLeft ? ` · 📸 faltam ${photoLeft} foto(s)` : ""}</div>`}
+        <h3 style="margin-top:12px">Aparelhos na sua conta</h3>
+        ${devicesPanel()}
+        <div class="btn-row" style="margin-top:10px"><button class="btn lilac" data-act="sync-now">🔄 Sincronizar agora</button><button class="btn sm" data-act="logout">Sair da conta neste aparelho</button></div>
+        <p class="muted" style="font-size:13px;margin-top:10px">📲 <b>Outro aparelho</b> (iPad, celular, outro computador): abra <b>laramva.github.io/rabisco-os</b>, toque em <b>👤 Entrar</b> e use o mesmo e-mail e senha. Na primeira vez as fotos podem levar alguns minutos (o ☁️ 📸 no topo mostra quantas faltam).</p>` : `
+        ${sessionLost ? `<div class="note warn">🔑 Sua sessão expirou. Entre de novo; nada do que está aqui foi perdido.</div>` : ""}
+        <p>Crie sua <b>conta grátis</b> (só e-mail e senha) para guardar progresso e fotos na nuvem e usar o Rabisco OS em <b>qualquer aparelho</b>: PC, iPad, celular.</p>
+        <div class="btn-row"><button class="btn mint" data-act="login" data-mode="up">✨ Criar conta</button><button class="btn lilac" data-act="login" data-mode="in">👤 Já tenho conta: Entrar</button></div>
+        <p class="muted" style="font-size:13px;margin-top:10px">O que já está neste aparelho entra na conta quando você entrar. 📱 No iPad/iPhone, entre <b>pelo app da tela de início</b> (o Safari guarda os dados separado).</p>`;
     return `<div class="grid g2">
+      ${win("Conta_Rabisco.net", acct, { icon: "👤" })}
       ${win("Perfil.ini", `
         <label class="field">Seu nome (aparece na saudação)<input type="text" id="cfg-name" value="${esc(S.name)}" maxlength="40"></label>
         <label class="field">Data de início da trilha<input type="date" id="cfg-start" value="${esc(S.startDate)}"></label>
         <label class="field">Tema<select id="cfg-theme"><option value="auto" ${S.theme === "auto" ? "selected" : ""}>Automático</option><option value="light" ${S.theme === "light" ? "selected" : ""}>Claro pastel</option><option value="dark" ${S.theme === "dark" ? "selected" : ""}>Escuro neon</option></select></label>
         <p class="muted" style="font-size:13px">A trilha não “pula” dias: se você faltar, o próximo dia continua te esperando. A streak conta dias do calendário em que você praticou.</p>`, { icon: "⚙️" })}
       ${win("Backup.dsk", `
-        <p>Tudo fica salvo <b>no seu aparelho</b> (funciona offline). Faça backup de vez em quando:</p>
+        <p>Tudo fica salvo <b>no seu aparelho</b> (funciona offline)${signedIn() ? " e na sua conta" : ""}. Um arquivo de backup extra de vez em quando não faz mal:</p>
         <div class="btn-row"><button class="btn mint" data-act="export">💾 Baixar backup (progresso)</button><button class="btn" data-act="export-full">💾 Backup completo (+ fotos)</button>
         <label class="btn butter">📂 Restaurar backup<input type="file" accept=".json,application/json" id="imp" hidden></label></div>
-        <p class="muted" style="font-size:13px;margin-top:10px">Dica: guarde o arquivo no Google Drive/iCloud. Pra passar pra outro aparelho, é só abrir o site lá e restaurar.</p>`, { icon: "💾" })}
-      ${win("Sync_PC+iPad.net", g.token ? `
-        <p>Este aparelho está <b>conectado</b>. O progresso sincroniza sozinho quando você abre o app, a cada exercício marcado e quando sai dele. O que você fizer no PC e no iPad é <b>somado</b>, nada é apagado.</p>
-        ${syncMsg === "erro" ? `<div class="note warn">⚠️ ${esc(syncErr)}</div>` : `<div class="note">${syncMsg === "sync" ? "☁️ Sincronizando…" : g.lastSync ? "✔ Última sincronização: " + new Date(g.lastSync).toLocaleString("pt-BR") : "☁️ Conectando…"}</div>`}
-        <div class="btn-row" style="margin-top:10px"><button class="btn lilac" data-act="gist-sync">🔄 Sincronizar agora</button><button class="btn sm" data-act="gist-off">Desconectar este aparelho</button></div>
-        <p class="muted" style="font-size:13px;margin-top:10px">Pra conectar outro aparelho, abra o Rabisco OS nele, vá em 💾 Backup e cole um token (pode ser o mesmo ou um novo). As <b>fotos também sincronizam</b> (cada uma num gist secreto seu); na primeira vez pode levar alguns minutos, o ☁️ 📸 no topo mostra quantas faltam.</p>` : `
-        <p>Use no <b>PC, iPad e celular</b> com o mesmo progresso, via um <b>Gist secreto</b> da sua conta GitHub (grátis). Faça isto <b>uma vez em cada aparelho</b>:</p>
-        <ol style="font-size:13.5px;padding-left:20px">
-          <li><a class="btn sm mint" href="https://github.com/settings/tokens/new?scopes=gist&amp;description=Rabisco%20OS" target="_blank" rel="noopener">🔑 Criar token no GitHub</a><br>Em <i>Expiration</i> escolha <b>No expiration</b>, deixe marcada só a caixa <b>gist</b> e clique em <i>Generate token</i>.</li>
-          <li>Copie o código que começa com <code>ghp_</code>, volte aqui e cole:</li>
-        </ol>
-        <label class="field">Token do GitHub<input type="password" id="gist-token" placeholder="ghp_…" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-        <div class="btn-row"><button class="btn lilac" data-act="gist-connect">🔗 Conectar e sincronizar</button></div>
-        <p class="muted" style="font-size:13px;margin-top:10px">📱 <b>No iPad:</b> faça isso <b>dentro do app da tela de início</b>, não no Safari (o iPad guarda os dados dos dois separados). O token fica salvo só no aparelho e só é enviado para o GitHub.</p>`, { icon: "🌐" })}
+        <p class="muted" style="font-size:13px;margin-top:10px">Dica: guarde o arquivo no Google Drive/iCloud.</p>`, { icon: "💾" })}
       ${win("Sobre.txt", `
         <p><b>Rabisco OS</b>: trilha de 365 dias com ${LESSONS.length} aulas, ${LESSONS.length * 2} exercícios, ${CHALLENGES.length} desafios e o Lab Cósmico. Funciona sem internet depois do 1º acesso e pode ser instalado como app (menu do navegador → “Instalar” / “Adicionar à tela inicial”).</p>
         <p class="muted" style="font-size:13px">Os links das aulas abrem a Ilustra Academy (precisa estar logado(a) lá). Este site é um caderno de exercícios pessoal e não é afiliado à Ilustra Academy.</p>
@@ -912,9 +916,86 @@
     } catch (e) { toast("Não consegui restaurar: " + e.message, "⚠️"); }
   }
 
-  // GitHub Gist sync (the token never leaves this device except to api.github.com).
-  // Every sync pulls, merges and pushes, so what was done on the PC and on the iPad adds up instead of overwriting.
-  const GIST_FILE = "rabisco-os-progresso.json";
+  /* ---------------------------------------------------------------- account + cloud sync (Firebase, free Spark plan) */
+  // A Rabisco OS account (e-mail + password) works on any device. Progress is one Firestore document per account and
+  // each photo is its own document. Every sync pulls, merges and pushes, so what each device did adds up instead of overwriting.
+  // The web key below is public by design: the security rules only let each signed-in account read and write users/<its uid>.
+  const FB_KEY = "AIzaSyDd1q6kSiXG_Z0mbu0Dng9HVryQRHzgIH8";
+  const FS = "https://firestore.googleapis.com/v1/projects/rabisco-os/databases/(default)/documents";
+  const IDT = "https://identitytoolkit.googleapis.com/v1/accounts:";
+  const AUTH_KEY = "rabisco-os-auth", EMAIL_KEY = "rabisco-os-email";
+  let AUTH = (() => { try { return JSON.parse(localStorage.getItem(AUTH_KEY)) || null; } catch (e) { return null; } })();
+  const signedIn = () => !!(AUTH && AUTH.uid && AUTH.refresh);
+  const lastEmail = () => { try { return localStorage.getItem(EMAIL_KEY) || ""; } catch (e) { return ""; } };
+  function setAuth(a) {
+    AUTH = a;
+    try { if (a) { localStorage.setItem(AUTH_KEY, JSON.stringify(a)); localStorage.setItem(EMAIL_KEY, a.email || ""); } else localStorage.removeItem(AUTH_KEY); } catch (e) {}
+  }
+  const AUTH_ERR = {
+    EMAIL_EXISTS: "Já existe uma conta com esse e-mail. Use “Entrar”.",
+    INVALID_LOGIN_CREDENTIALS: "E-mail ou senha incorretos.",
+    INVALID_PASSWORD: "E-mail ou senha incorretos.",
+    EMAIL_NOT_FOUND: "E-mail ou senha incorretos.",
+    INVALID_EMAIL: "Esse e-mail não parece válido.",
+    MISSING_EMAIL: "Digite seu e-mail.",
+    MISSING_PASSWORD: "Digite a senha.",
+    WEAK_PASSWORD: "A senha precisa ter pelo menos 6 caracteres.",
+    TOO_MANY_ATTEMPTS_TRY_LATER: "Muitas tentativas seguidas. Espere alguns minutos e tente de novo.",
+    USER_DISABLED: "Esta conta foi desativada.",
+    TOKEN_EXPIRED: "Sua sessão expirou. Entre de novo.",
+    INVALID_REFRESH_TOKEN: "Sua sessão expirou. Entre de novo.",
+    USER_NOT_FOUND: "Conta não encontrada. Entre de novo.",
+  };
+  async function authCall(url, body, form) {
+    let r;
+    try {
+      r = await fetch(url, { method: "POST", cache: "no-store", headers: { "Content-Type": form ? "application/x-www-form-urlencoded" : "application/json", "X-Firebase-Locale": "pt-BR" }, body: form ? new URLSearchParams(body) : JSON.stringify(body) });
+    } catch (e) { const err = new Error("Sem internet agora. Conecte e tente de novo."); err.offline = true; throw err; }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const code = String((j.error && j.error.message) || r.status).split(/[ :]/)[0];
+      const e = new Error(AUTH_ERR[code] || `Não deu certo (${code}). Tente de novo.`); e.code = code; throw e;
+    }
+    return j;
+  }
+  async function signInOrUp(mode, email, password) {
+    const j = await authCall(IDT + (mode === "up" ? "signUp" : "signInWithPassword") + "?key=" + FB_KEY, { email, password, returnSecureToken: true });
+    setAuth({ uid: j.localId, email: j.email || email, token: j.idToken, refresh: j.refreshToken, exp: Date.now() + (+j.expiresIn || 3600) * 1000, lastSync: "" });
+  }
+  const sendReset = (email) => authCall(IDT + "sendOobCode?key=" + FB_KEY, { requestType: "PASSWORD_RESET", email });
+  // The sign-in lasts until "Sair": the short-lived token is renewed with the refresh token whenever needed.
+  async function idToken(force) {
+    if (!signedIn()) throw new Error("Entre na sua conta para sincronizar.");
+    if (!force && AUTH.token && Date.now() < AUTH.exp - 120000) return AUTH.token;
+    try {
+      const j = await authCall("https://securetoken.googleapis.com/v1/token?key=" + FB_KEY, { grant_type: "refresh_token", refresh_token: AUTH.refresh }, true);
+      setAuth(Object.assign({}, AUTH, { token: j.id_token, refresh: j.refresh_token || AUTH.refresh, exp: Date.now() + (+j.expires_in || 3600) * 1000 }));
+      return AUTH.token;
+    } catch (e) {
+      if (!e.offline && /TOKEN|USER_|PROJECT_NUMBER_MISMATCH/.test(e.code || "")) { setAuth(null); sessionLost = true; }
+      throw e;
+    }
+  }
+  let sessionLost = false;
+  async function fs(path, opt = {}, retried) {
+    const init = { method: opt.method || "GET", cache: "no-store", headers: { Authorization: "Bearer " + (await idToken(retried)) } };
+    if (opt.body) { init.body = opt.body; init.headers["Content-Type"] = "application/json"; }
+    let r;
+    try { r = await fetch(FS + path, init); } catch (e) { const err = new Error("Sem conexão com a nuvem agora."); err.offline = true; throw err; }
+    if (r.status === 401 && !retried) return fs(path, opt, true);
+    if (r.status === 404 && opt.miss) return null;
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const st = (j.error && j.error.status) || "";
+      const e = new Error(r.status === 403 ? "A nuvem recusou o acesso. Saia da conta e entre de novo."
+        : st === "RESOURCE_EXHAUSTED" ? "O limite grátis diário da nuvem acabou; continua sozinho amanhã."
+        : `A nuvem respondeu ${r.status} ${st}`.trim());
+      e.status = r.status; e.fsStatus = st; throw e;
+    }
+    return j;
+  }
+  const userPath = (p) => `/users/${AUTH.uid}/${p}`;
+
   const LOCAL_ONLY = ["gist", "theme", "timerMin", "_photoCount"];
   function syncPayload() { const c = JSON.parse(JSON.stringify(S)); LOCAL_ONLY.forEach((k) => delete c[k]); return JSON.stringify({ app: "rabisco-os", v: 1, state: c }); }
   // Order-independent fingerprint of the synced part of a state.
@@ -925,7 +1006,7 @@
     const c = Object.assign({}, s); LOCAL_ONLY.concat("updatedAt").forEach((k) => delete c[k]);
     return st(c);
   }
-  function mergeState(a, b) { // a = this device, b = the Gist
+  function mergeState(a, b) { // a = this device, b = the cloud
     const ma = a.mt || {}, mb = b.mt || {};
     const timed = (k) => !!(ma[k] || mb[k]);
     const newer = (k) => ((ma[k] || "") >= (mb[k] || "") ? a : b);
@@ -945,7 +1026,8 @@
     out.ex = map("ex", "ex:", (x, y) => [!!(x[0] || y[0]), !!(x[1] || y[1])]);
     out.lab = map("lab", "lab:", minDate);
     out.badges = map("badges", "badge:", minDate);
-    out.photoIdx = map("photoIdx", "photo:", (x, y) => Object.assign({}, y, x, { g: x.g || y.g }));
+    out.photoIdx = map("photoIdx", "photo:", (x, y) => Object.assign({}, y, x, { g: x.g || y.g, c: x.c || y.c || undefined }));
+    out.devices = map("devices", "dev:", (x, y) => ((x.at || "") >= (y.at || "") ? x : y));
     out.activity = maxMap(a.activity, b.activity);
     out.usedFreezes = Object.assign({}, b.usedFreezes, a.usedFreezes);
     out.xpBy = maxMap(a.xpBy, b.xpBy);
@@ -958,30 +1040,86 @@
     out.createdAt = minDate(a.createdAt, b.createdAt);
     return out;
   }
-  async function gh(url, opt) {
-    const r = await fetch(url, Object.assign({ cache: "no-store" }, opt, { headers: { Authorization: `Bearer ${S.gist.token}`, Accept: "application/vnd.github+json" } }));
-    if (r.status === 401) throw new Error("O GitHub recusou o token (inválido ou expirado). Desconecte e cole um token novo.");
-    if (r.status === 403 || r.status === 404) { const e = new Error(`GitHub respondeu ${r.status}. Confira se o token tem a permissão “gist”.`); e.status = r.status; throw e; }
-    if (r.status === 429 || r.status === 422) { const e = new Error(`GitHub respondeu ${r.status}`); e.status = r.status; throw e; }
-    if (!r.ok) throw new Error(`GitHub respondeu ${r.status}`);
-    return r.status === 204 ? null : r.json();
+
+  async function readCloud() {
+    const j = await fs(userPath("data/progress"), { miss: true });
+    if (!j) return { remote: null, time: "" };
+    const raw = j.fields && j.fields.json && j.fields.json.stringValue;
+    const data = raw ? JSON.parse(raw) : null;
+    return { remote: data && data.app === "rabisco-os" && data.state ? fixState(data.state) : null, time: j.updateTime || "" };
   }
-  async function findGist() {
-    // the progress gist can sit behind many photo gists, so walk the pages
-    for (let page = 1; page <= 30; page++) {
-      const list = await gh(`https://api.github.com/gists?per_page=100&page=${page}`);
-      const hit = list.filter((x) => x.files && x.files[GIST_FILE]).sort((x, y) => (y.updated_at > x.updated_at ? 1 : -1))[0];
-      if (hit) return hit.id;
-      if (list.length < 100) break;
+  // The precondition makes a write fail if another device saved in between; the sync then merges again instead of overwriting.
+  function writeCloud(time) {
+    const pre = time ? "currentDocument.updateTime=" + encodeURIComponent(time) : "currentDocument.exists=false";
+    return fs(userPath("data/progress") + "?" + pre, { method: "PATCH", body: JSON.stringify({ fields: { json: { stringValue: syncPayload() }, at: { timestampValue: new Date().toISOString() } } }) });
+  }
+  async function doSync() {
+    let changed = false;
+    for (let attempt = 0; ; attempt++) {
+      const { remote, time } = await readCloud();
+      const merged = remote ? mergeState(S, remote) : S;
+      if (syncKey(merged) !== syncKey(S)) { S = merged; changed = true; }
+      await stampDevice();
+      if (remote && syncKey(S) === syncKey(remote)) break;
+      try { await writeCloud(time); break; }
+      catch (e) { if (attempt < 4 && /FAILED_PRECONDITION|ALREADY_EXISTS|ABORTED/.test(e.fsStatus || "")) continue; throw e; }
     }
-    return "";
+    setAuth(Object.assign({}, AUTH, { lastSync: new Date().toISOString() }));
+    save(true, true);
+    return changed;
   }
 
-  // Photos sync one secret gist per photo; the progress gist only carries the index (S.photoIdx).
-  const PHOTO_FILE = "rabisco-os-foto.json";
+  // One-time move from the old GitHub sync: bring what the Gist still holds (progress + photos) into the account, then drop the token.
+  async function legacyImport() {
+    const g = S.gist;
+    if (!g || !g.token) return false;
+    const gh = async (url) => {
+      const r = await fetch(url, { cache: "no-store", headers: { Authorization: "Bearer " + g.token, Accept: "application/vnd.github+json" } });
+      if (!r.ok) { const e = new Error("GitHub " + r.status); e.status = r.status; throw e; }
+      return r.json();
+    };
+    const fileOf = async (j, name) => { const f = j.files && j.files[name]; return f ? JSON.parse(f.truncated ? await (await fetch(f.raw_url, { cache: "no-store" })).text() : f.content) : null; };
+    let changed = false;
+    try {
+      let id = g.id;
+      for (let page = 1; !id && page <= 30; page++) {
+        const list = await gh(`https://api.github.com/gists?per_page=100&page=${page}`);
+        const hit = list.filter((x) => x.files && x.files["rabisco-os-progresso.json"]).sort((x, y) => (y.updated_at > x.updated_at ? 1 : -1))[0];
+        if (hit) id = hit.id; else if (list.length < 100) break;
+      }
+      if (id) {
+        const data = await fileOf(await gh(`https://api.github.com/gists/${id}`), "rabisco-os-progresso.json");
+        if (data && data.app === "rabisco-os" && data.state) {
+          const merged = mergeState(S, fixState(data.state));
+          if (syncKey(merged) !== syncKey(S)) { S = merged; changed = true; }
+        }
+      }
+      const have = new Set((await photos()).map((p) => p.id));
+      for (const [pid, e] of Object.entries(S.photoIdx)) {
+        if (e.del || !e.g || have.has(pid)) continue;
+        try {
+          const data = await fileOf(await gh(`https://api.github.com/gists/${e.g}`), "rabisco-os-foto.json");
+          if (data && data.photo && data.photo.data) { await idbPut("photos", null, data.photo); PHOTOS = null; changed = true; }
+        } catch (err) { if (err.status !== 404) throw err; }
+      }
+    } catch (err) {
+      if (err.status !== 401 && err.status !== 404) { console.warn("legacy import", err); return changed; } // offline or rate limit: try again next sync
+    }
+    S.gist = { id: "", token: "", lastSync: "" };
+    save(true, true);
+    return changed;
+  }
+
+  // Photos: each one is a document users/<uid>/photos/<id>; S.photoIdx[id].c marks it as saved in the cloud.
+  const MAX_DOC = 900000; // Firestore documents hold up to 1 MiB
+  async function fitForCloud(p) {
+    let data = p.data, max = 1600, q = 0.8;
+    while (data.length >= MAX_DOC && max >= 500) { data = await drawScaled(p.data, max, q); max -= 300; q = Math.max(0.6, q - 0.05); }
+    return data === p.data ? p : Object.assign({}, p, { data });
+  }
   let photoSyncing = false, photoLeft = 0;
   async function syncPhotos() {
-    if (photoSyncing || !S.gist.token || !navigator.onLine) return false;
+    if (photoSyncing || !signedIn() || !navigator.onLine) return false;
     photoSyncing = true;
     let changed = false;
     try {
@@ -989,84 +1127,107 @@
       const idx = S.photoIdx;
       // deleted on another device
       for (const [id, e] of Object.entries(idx)) if (e.del && have.has(id)) { await idbDel("photos", id); PHOTOS = null; changed = true; }
-      const up = (await photos()).filter((p) => !(idx[p.id] && (idx[p.id].g || idx[p.id].del)));
-      const down = Object.entries(idx).filter(([id, e]) => !e.del && e.g && !have.has(id));
+      const up = (await photos()).filter((p) => !(idx[p.id] && (idx[p.id].c || idx[p.id].del)));
+      const down = Object.entries(idx).filter(([id, e]) => !e.del && e.c && !have.has(id));
       photoLeft = up.length + down.length; renderChips();
       for (const p of up) {
-        const j = await gh("https://api.github.com/gists", { method: "POST", body: JSON.stringify({ description: "Rabisco OS — foto (sync)", public: false, files: { [PHOTO_FILE]: { content: JSON.stringify({ app: "rabisco-os-foto", v: 1, photo: p }) } } }) });
-        S.photoIdx[p.id] = { g: j.id, kind: p.kind, day: p.day || null, ts: p.ts };
+        const c = await fitForCloud(p);
+        await fs(userPath("photos/" + encodeURIComponent(p.id)), { method: "PATCH", body: JSON.stringify({ fields: { photo: { stringValue: JSON.stringify(c) } } }) });
+        S.photoIdx[p.id] = Object.assign({}, S.photoIdx[p.id], { c: 1, kind: p.kind, day: p.day || null, ts: p.ts });
         save(true); photoLeft--; renderChips();
       }
-      for (const [id, e] of down) {
-        try {
-          const j = await gh(`https://api.github.com/gists/${e.g}`);
-          const f = j.files && j.files[PHOTO_FILE];
-          const data = f && JSON.parse(f.truncated ? await (await fetch(f.raw_url, { cache: "no-store" })).text() : f.content);
-          if (data && data.photo && data.photo.data) { await idbPut("photos", null, data.photo); PHOTOS = null; changed = true; }
-        } catch (err) {
-          if (err.status !== 404) throw err;
-          S.photoIdx[id] = { del: true }; touch("photo:" + id); save(true);
-        }
+      for (const [id] of down) {
+        const j = await fs(userPath("photos/" + encodeURIComponent(id)), { miss: true });
+        const raw = j && j.fields && j.fields.photo && j.fields.photo.stringValue;
+        const p = raw ? JSON.parse(raw) : null;
+        if (p && p.data) { await idbPut("photos", null, p); PHOTOS = null; changed = true; }
         photoLeft--; renderChips();
       }
       // remove the cloud copy of photos deleted here or elsewhere
       for (const [id, e] of Object.entries(S.photoIdx)) {
-        if (!e.del || e.gone || !e.g) continue;
-        try { await gh(`https://api.github.com/gists/${e.g}`, { method: "DELETE" }); } catch (err) { if (err.status !== 404) continue; }
-        S.photoIdx[id] = { del: true, g: e.g, gone: true }; save(true);
+        if (!e.del || e.gone) continue;
+        await fs(userPath("photos/" + encodeURIComponent(id)), { method: "DELETE" });
+        S.photoIdx[id] = { del: true, gone: true }; save(true);
       }
     } catch (err) {
-      console.warn("photo sync", err); // retried on the next sync (rate limits, offline...)
+      console.warn("photo sync", err); // retried on the next sync (offline, daily limit...)
     } finally {
       photoSyncing = false; photoLeft = 0; renderChips();
     }
-    if (changed) { const all = await photos(); S._photoCount = all.filter((p) => p.kind !== "mood").length; checkBadges(); fillThumbs(); fillGallery(); }
+    if (changed) { const all = await photos(); S._photoCount = all.filter((p) => p.kind !== "mood").length; checkBadges(); fillThumbs(); fillGallery(); scheduleAutoSync(); }
     return changed;
   }
-  async function readGist(id) {
-    const j = await gh(`https://api.github.com/gists/${id}`);
-    const f = j.files && j.files[GIST_FILE];
-    if (!f) return null;
-    const data = JSON.parse(f.truncated ? await (await fetch(f.raw_url, { cache: "no-store" })).text() : f.content);
-    return data && data.app === "rabisco-os" && data.state ? fixState(data.state) : null;
+
+  // Each device writes what it holds at sync time, so any device can tell whether all of them match.
+  function deviceKind() {
+    const ua = navigator.userAgent;
+    const ipad = /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    const kind = ipad ? "iPad" : /iPhone/.test(ua) ? "iPhone" : /Android/.test(ua) ? "Android" : /Windows/.test(ua) ? "PC" : /Mac/.test(ua) ? "Mac" : "Aparelho";
+    const app = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+    return { kind, app };
   }
-  async function doSync() {
-    const g = S.gist;
-    if (!g.id) g.id = await findGist();
-    let remote = null;
-    if (g.id) {
-      try { remote = await readGist(g.id); }
-      catch (e) { if (e.status !== 404) throw e; g.id = await findGist(); remote = g.id ? await readGist(g.id) : null; }
-    }
-    const merged = remote ? mergeState(S, remote) : S;
-    const changed = syncKey(merged) !== syncKey(S);
-    if (changed) S = merged;
-    if (!remote || syncKey(merged) !== syncKey(remote)) {
-      const body = { description: "Rabisco OS — progresso (sync)", files: { [GIST_FILE]: { content: syncPayload() } } };
-      const j = await gh(g.id ? `https://api.github.com/gists/${g.id}` : "https://api.github.com/gists", { method: g.id ? "PATCH" : "POST", body: JSON.stringify(g.id ? body : Object.assign(body, { public: false })) });
-      S.gist.id = j.id;
-    }
-    S.gist.lastSync = new Date().toISOString();
-    save(true, true);
-    return changed;
+  function fingerprint(s) {
+    const c = Object.assign({}, s); delete c.devices;
+    c.mt = Object.fromEntries(Object.entries(s.mt || {}).filter(([k]) => !k.startsWith("dev:")));
+    const str = syncKey(c); let h = 5381;
+    for (let i = 0; i < str.length; i++) h = (h * 33 + str.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
   }
+  async function stampDevice() {
+    const k = deviceKind();
+    const me = { kind: k.kind, app: k.app, ver: APP_VERSION, fp: fingerprint(S), photos: (await photos()).length, at: new Date().toISOString() };
+    const old = S.devices[DEVICE];
+    if (old && old.fp === me.fp && old.photos === me.photos && old.ver === me.ver && old.app === me.app && Date.now() - Date.parse(old.at) < 10 * 60000) return;
+    S.devices[DEVICE] = me; touch("dev:" + DEVICE);
+  }
+  const photoTotal = () => Object.values(S.photoIdx).filter((e) => !e.del).length;
+  // ok only when 2+ devices synced the same progress, all have every photo, and nothing here is still unsent
+  function syncHealth() {
+    const devs = Object.entries(S.devices || {}).sort((a, b) => (b[1].at || "").localeCompare(a[1].at || ""));
+    const total = photoTotal();
+    const latest = devs.length ? devs[0][1].fp : "";
+    const mine = S.devices[DEVICE];
+    const rows = devs.map(([id, d]) => ({ id, d, upToDate: d.fp === latest && d.photos === total }));
+    const ok = signedIn() && devs.length >= 2 && rows.every((r) => r.upToDate) && !photoLeft && !!mine && mine.fp === fingerprint(S) && syncMsg !== "erro";
+    return { rows, total, ok };
+  }
+  function ago(iso) {
+    const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+    return m < 1 ? "agora" : m < 60 ? `há ${m} min` : m < 1440 ? `há ${Math.round(m / 60)} h` : `há ${Math.round(m / 1440)} dia(s)`;
+  }
+  function devicesPanel() {
+    const h = syncHealth();
+    if (!h.rows.length) return `<div class="note">☁️ Os aparelhos aparecem aqui depois da primeira sincronização.</div>`;
+    const safari = h.rows.some((r) => /iPad|iPhone/.test(r.d.kind) && !r.d.app);
+    return `${h.ok
+        ? `<div class="note">✔ <b>Tudo sincronizado:</b> os ${h.rows.length} aparelhos têm o mesmo progresso e todas as ${h.total} foto(s).</div>`
+        : `<div class="note warn">⏳ <b>Ainda não está tudo igual.</b> ${h.rows.length < 2 ? "Só este aparelho entrou na conta até agora: abra o Rabisco OS no outro aparelho e entre com o mesmo e-mail e senha." : "Abra o app nos aparelhos marcados com ⏳ e espere o ☁️ ficar ✔."}</div>`}
+      <ul class="clean devs">${h.rows.map((r) => `<li>${r.upToDate ? "✔" : "⏳"} <b>${r.d.kind === "iPad" || r.d.kind === "iPhone" ? "📱" : "💻"} ${esc(r.d.kind)}</b> · ${r.d.app ? "app" : "navegador"}${r.id === DEVICE ? " <span class=\"tag\">este aparelho</span>" : ""}
+        <br><span class="muted">v${esc(r.d.ver)} · sincronizou ${ago(r.d.at)} · ${r.d.photos}/${h.total} fotos</span>
+        ${r.id !== DEVICE ? ` <button class="btn sm" data-act="dev-forget" data-id="${esc(r.id)}" title="Tirar da lista (volta sozinho se ainda estiver em uso)">esquecer</button>` : ""}</li>`).join("")}</ul>
+      ${safari ? `<p class="muted" style="font-size:13px">📱 Um aparelho aparece como <b>navegador</b> no iPad/iPhone: é o Safari, que guarda os dados separado do app. Dá pra usar os dois (é só entrar na conta), mas se não usa o Safari toque em “esquecer” na linha dele.</p>` : ""}`;
+  }
+
   let syncing = null, syncAgain = false, syncMsg = "", syncErr = "", syncT = null;
-  const syncTitle = () => (syncMsg === "erro" ? "Erro na sincronização: " + syncErr : S.gist.lastSync ? "Sincronizado em " + new Date(S.gist.lastSync).toLocaleString("pt-BR") : "Sincronização");
+  const syncTitle = () => (syncMsg === "erro" ? "Erro na sincronização: " + syncErr
+    : syncHealth().ok ? "✔✔ Todos os aparelhos têm o mesmo progresso e todas as fotos"
+    : AUTH && AUTH.lastSync ? "Este aparelho sincronizou em " + new Date(AUTH.lastSync).toLocaleString("pt-BR") + " (veja os aparelhos em 👤 Conta)" : "Sincronização");
   const isTyping = () => { const el = document.activeElement; return !!el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName); };
   function syncNow(quiet) {
-    if (!S.gist.token) return Promise.resolve();
+    if (!signedIn()) return Promise.resolve();
     if (!navigator.onLine) { syncMsg = "offline"; renderChips(); return Promise.resolve(); }
     if (syncing) { syncAgain = true; return syncing; }
     clearTimeout(syncT); syncT = null;
     syncMsg = "sync"; renderChips();
-    syncing = doSync().then((changed) => {
+    syncing = (async () => { const a = await legacyImport(); const b = await doSync(); return a || b; })().then((changed) => {
       syncMsg = "ok"; syncErr = "";
       if (changed) checkBadges();
       syncPhotos();
       if ((changed || !quiet) && !isTyping()) route();
       if (!quiet) toast(changed ? "Sincronizado: chegou progresso de outro aparelho ✔" : "Tudo sincronizado ✔", "☁️");
     }).catch((e) => {
-      syncMsg = "erro"; syncErr = e.message || String(e);
+      if (sessionLost) { syncMsg = ""; toast("Sua sessão expirou. Entre na conta de novo (👤 Conta).", "🔑"); route(); return; }
+      syncMsg = e.offline ? "offline" : "erro"; syncErr = e.message || String(e);
       if (!quiet) { toast("Falha na sincronização: " + syncErr, "⚠️"); route(); }
     }).finally(() => {
       syncing = null; renderChips();
@@ -1075,9 +1236,66 @@
     return syncing;
   }
   function scheduleAutoSync() {
-    if (!S.gist || !S.gist.token) return;
+    if (!signedIn()) return;
     clearTimeout(syncT);
     syncT = setTimeout(() => syncNow(true), 4000);
+  }
+
+  // Sign in / create account / forgot password, all in one window.
+  function openLogin(mode) {
+    let m = mode || "in";
+    const d = modal("Conta_Rabisco.exe", `<form class="acct" novalidate>
+        <div class="btn-row acct-tabs" role="tablist"><button type="button" class="btn sm" data-mode="in" role="tab">👤 Entrar</button><button type="button" class="btn sm" data-mode="up" role="tab">✨ Criar conta</button></div>
+        <p class="acct-intro"></p>
+        <label class="field">E-mail<input type="email" name="email" autocomplete="username" autocapitalize="off" spellcheck="false" required value="${esc(lastEmail())}"></label>
+        <label class="field acct-pw">Senha<span class="pw-row"><input type="password" name="pw" minlength="6" required><button type="button" class="btn sm" data-eye title="Mostrar senha">👁</button></span></label>
+        <label class="field acct-pw2">Repita a senha<input type="password" name="pw2" autocomplete="new-password" minlength="6"></label>
+        <div class="note warn acct-err" hidden></div>
+        <div class="btn-row"><button type="submit" class="btn mint acct-go"></button><button type="button" class="btn sm acct-forgot" data-mode="reset">Esqueci a senha</button></div>
+      </form>`, (dlg) => {
+      const f = $("form", dlg), err = $(".acct-err", dlg), go = $(".acct-go", dlg);
+      const show = () => {
+        $$(".acct-tabs [data-mode]", dlg).forEach((b) => { b.classList.toggle("lilac", b.dataset.mode === m); b.setAttribute("aria-selected", b.dataset.mode === m); });
+        $(".acct-intro", dlg).innerHTML = m === "up" ? "Crie sua conta grátis. Seu progresso e suas fotos ficam salvos nela e aparecem em <b>qualquer aparelho</b> em que você entrar."
+          : m === "reset" ? "Digite o e-mail da conta. Vamos mandar um link para você criar uma senha nova (olhe também no spam)."
+          : "Entre com o e-mail e a senha da sua conta Rabisco OS. O que já está neste aparelho é somado ao que está na conta.";
+        $(".acct-pw", dlg).hidden = m === "reset"; $(".acct-pw2", dlg).hidden = m !== "up";
+        f.pw.autocomplete = m === "up" ? "new-password" : "current-password";
+        $(".acct-forgot", dlg).hidden = m !== "in";
+        go.textContent = m === "up" ? "✨ Criar conta" : m === "reset" ? "📧 Mandar link" : "👤 Entrar";
+        err.hidden = true;
+      };
+      const fail = (msg) => { err.textContent = msg; err.hidden = false; };
+      dlg.addEventListener("click", (e) => {
+        const b = e.target.closest("[data-mode]"); if (b) { m = b.dataset.mode; show(); (m === "reset" || !f.email.value ? f.email : f.pw).focus(); }
+        if (e.target.closest("[data-eye]")) { const t = f.pw.type === "password" ? "text" : "password"; f.pw.type = t; f.pw2.type = t; }
+      });
+      f.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const email = f.email.value.trim(), pw = f.pw.value;
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail("Digite um e-mail válido.");
+        if (m !== "reset" && pw.length < 6) return fail("A senha precisa ter pelo menos 6 caracteres.");
+        if (m === "up" && pw !== f.pw2.value) return fail("As duas senhas não são iguais.");
+        go.disabled = true; const label = go.textContent; go.textContent = "⏳ Um instante…"; err.hidden = true;
+        try {
+          if (m === "reset") {
+            await sendReset(email);
+            m = "in"; show();
+            $(".acct-intro", dlg).innerHTML = `📧 <b>Pronto!</b> Se existir uma conta com <b>${esc(email)}</b>, o link para criar uma senha nova chegou no e-mail (olhe no spam também). Depois é só entrar aqui com a senha nova.`;
+          } else {
+            await signInOrUp(m, email, pw);
+            sessionLost = false;
+            dlg.close();
+            toast(m === "up" ? "Conta criada! Salvando seu progresso e suas fotos na nuvem… ☁️" : "Entrou! Juntando seu progresso e suas fotos… ☁️", "👤");
+            route(); syncNow(true);
+          }
+        } catch (ex) { fail(ex.message); }
+        finally { go.disabled = false; if (go.textContent === "⏳ Um instante…") go.textContent = label; }
+      });
+      show();
+      setTimeout(() => (f.email.value ? f.pw : f.email).focus(), 50);
+    });
+    return d;
   }
 
   /* ---------------------------------------------------------------- actions */
@@ -1143,13 +1361,10 @@
     else if (a === "roll") { const d = $("#dice"); if (d) d.innerHTML = rollDice(); }
     else if (a === "export") doExport(false);
     else if (a === "export-full") doExport(true);
-    else if (a === "gist-connect") {
-      const tok = $("#gist-token").value.trim();
-      if (!/^(ghp_|github_pat_|gho_)\w{20,}$/.test(tok)) { toast("Cole o token inteiro (começa com ghp_ ou github_pat_).", "🔑"); return; }
-      S.gist = { id: "", token: tok, lastSync: "" }; save(true, true); route(); syncNow(false);
-    }
-    else if (a === "gist-sync") syncNow(false);
-    else if (a === "gist-off") { if (confirm("Desconectar este aparelho da sincronização? O progresso continua salvo aqui.")) { S.gist = { id: "", token: "", lastSync: "" }; syncMsg = ""; save(); route(); } }
+    else if (a === "login") openLogin(t.dataset.mode);
+    else if (a === "sync-now") syncNow(false);
+    else if (a === "dev-forget") { delete S.devices[t.dataset.id]; touch("dev:" + t.dataset.id); save(true); route(); }
+    else if (a === "logout") { if (confirm("Sair da conta neste aparelho? Seu progresso continua salvo aqui e na conta; é só entrar de novo quando quiser.")) { setAuth(null); syncMsg = ""; route(); } }
     else if (a === "reset") { if (confirm("Isso apaga TODO o progresso deste aparelho. Tem certeza?") && confirm("Último aviso! Fez backup?")) { localStorage.removeItem(STORE_KEY); idbDel("kv", "state").finally(() => location.reload()); } }
   });
 

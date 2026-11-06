@@ -1,5 +1,5 @@
 /* Offline-first service worker: precache the app shell, cache everything else on first use. */
-const VERSION = "rabisco-os-v1.4.0";
+const VERSION = "rabisco-os-v1.7.0";
 const SHELL = [
   "./", "index.html", "styles.css", "app.js", "manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png",
   "icon-maskable-512.png", "apple-touch-icon.png",
@@ -22,7 +22,7 @@ self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  if (url.hostname === "api.github.com") return; // sync must always hit the network
+  if (url.hostname === "api.github.com" || url.hostname.endsWith("googleapis.com")) return; // account + sync must always hit the network
 
   if (url.origin === location.origin) {
     // app files: network first, skipping the browser's HTTP cache so every file updates together; cache as fallback

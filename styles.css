@@ -350,3 +350,11 @@ kbd { font-family: var(--font-mono); font-size: 16px; border: 1.5px solid var(--
 .acct [hidden] { display: none !important; }
 .chip.login { cursor: pointer; background: var(--mint, #c8ebe1); }
 .acct-nudge .btn { margin-left: 6px; vertical-align: middle; }
+/* trail map grouped like the PDF (trilha -> curso) */
+section.trilha { margin-top: 18px; padding-top: 6px; border-top: 2px dashed var(--chrome-lo); }
+section.trilha:first-of-type { border-top: 0; margin-top: 0; }
+section.trilha h2 { margin: 6px 0 4px; }
+.unlock-txt { font-size: 13px; margin: 2px 0 6px; color: var(--ink-2, inherit); opacity: .85; }
+.note.unlock { font-size: 13.5px; }
+.old-thumbs { padding: 6px 12px 10px; }
+.old-thumbs .meta { font-size: 12.5px; opacity: .8; margin-bottom: 4px; }

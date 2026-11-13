@@ -6,7 +6,9 @@
   const LESSON_URL = "https://app.ilustraacademy.com/courses/l/";
   const STORE_KEY = "rabisco-os-v1";
   const TOTAL_DAYS = 365;
-  const APP_VERSION = "1.7"; // bump together with VERSION in sw.js on every publish, so installed apps update themselves
+  const PLAN_V = 2; // 2 = trilha na ordem do PDF "ordem dos treinamentos" (v1.8)
+  const PLAN_V_START = "2026-11-12";
+  const APP_VERSION = "1.8"; // bump together with VERSION in sw.js on every publish, so installed apps update themselves
 
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -21,10 +23,26 @@
   const COURSES = window.COURSES || [];
   const EX = window.EX || {};
   const CHALLENGES = window.CHALLENGES || [];
+  const TRILHAS = window.TRILHAS || [];
+  const CH_COURSE = window.CH_COURSE || {}; // courseKey -> weekly challenges for that course
+  const CH_BOSS = window.CH_BOSS || [];      // one list of monthly bosses per trilha
   const LAB = window.LAB || { modules: [] };
   const TIPS = window.TIPS || [];
 
-  const LIGHT_RE = /^(boas[ -]vindas|boas vindas ao curso|materiais|materiais e exerc[ií]cios|exerc[ií]cios e materiais|exerc[ií]cios|apostila.*|certificado.*|projeto de conclus.*|projeto de conclusão e certificado|ordem dos treinamentos|recursos da plataforma|introdu[cç][aã]o)$/i;
+  // Short lessons (welcome, materials...) can share a day with the next lesson.
+  const LIGHT_RE = /^(boas[ -]vindas|boas vindas ao curso|materiais|materiais e exerc[ií]cios|exerc[ií]cios e materiais|exerc[ií]cios|apostila.*|ordem dos treinamentos|recursos da plataforma|introdu[cç][aã]o|introdu[cç][aã]o ao curso|tudo pronto para iniciar\?)$/i;
+
+  // The Trilha 365 follows the PDF "ordem dos treinamentos": trilhas in order, courses in order, lessons in order.
+  // Courses outside the PDF stay in the Biblioteca as extras.
+  const PLAN_COURSES = [];
+  TRILHAS.forEach((t, ti) => t.c.forEach((x, k) => {
+    const c = COURSES.find((cc) => cc.id.startsWith(x.k));
+    if (!c) return;
+    Object.assign(c, { trilha: t, tn: ti + 1, po: ti * 100 + k, unlock: x.u, key: x.k, cat: `${t.n} · ${t.t}` });
+    PLAN_COURSES.push(c);
+  }));
+  COURSES.forEach((c) => { if (!c.trilha) { c.key = c.id.slice(0, 8); c.po = 1000 + (c.po || 0); c.cat = "Extras (fora da trilha) · " + c.cat; } });
+  COURSES.sort((a, b) => a.po - b.po);
 
   // Flatten every lesson of every course, keeping its exercises.
   const LESSONS = [];
@@ -49,53 +67,55 @@
   if (missingEx.length) console.warn("[exercícios] aulas sem exercício:", missingEx);
 
   /* ------------------------------------------------------------- the plan */
-  // Two tracks run side by side: A = fundamentos/personagens, B = cor/técnica/mentorias.
-  // Every 7th day is a challenge (every 28th a boss), day 365 is the grand finale.
+  // Every 7th day is a challenge about that week's course (every 28th a boss of the trilha), day 365 is the grand finale.
+  // The other days get the lessons, one per day; when there are more lessons than days, short lessons share a day.
   function buildPlan() {
-    const byPlanOrder = (a, b) => (a.course.po - b.course.po) || (a.idx - b.idx);
-    const A = LESSONS.filter((l) => l.course.track !== "B").sort(byPlanOrder);
-    const B = LESSONS.filter((l) => l.course.track === "B").sort(byPlanOrder);
-    const seq = [];
-    let ia = 0, ib = 0;
-    while (ia < A.length || ib < B.length) {
-      const fa = A.length ? ia / A.length : 1, fb = B.length ? ib / B.length : 1;
-      if (ib >= B.length || (ia < A.length && fa <= fb)) seq.push(A[ia++]); else seq.push(B[ib++]);
-    }
-    const w = (l) => (l.light ? 0.5 : 1);
     const special = new Set();
     for (let d = 7; d < TOTAL_DAYS; d += 7) special.add(d);
     special.add(TOTAL_DAYS);
     const lessonDays = [];
     for (let d = 1; d <= TOTAL_DAYS; d++) if (!special.has(d)) lessonDays.push(d);
-    const totalW = seq.reduce((s, l) => s + w(l), 0);
-    const days = {};
-    let k = 0, acc = 0;
-    lessonDays.forEach((d, i) => {
-      const target = ((i + 1) * totalW) / lessonDays.length;
-      const list = [];
-      while (k < seq.length && (list.length === 0 || acc + w(seq[k]) <= target + 0.26) && (list.length < 3 || i === lessonDays.length - 1)) {
-        acc += w(seq[k]);
-        list.push(seq[k++]);
+    const w = (l) => (l.light ? 0.5 : 1);
+    let units = PLAN_COURSES.flatMap((c) => LESSONS.filter((l) => l.course === c)).map((l) => [l]);
+    while (units.length > lessonDays.length) {
+      let best = -1, bestCost = Infinity;
+      for (let i = 0; i + 1 < units.length; i++) {
+        const a = units[i], b = units[i + 1];
+        if (a[0].course !== b[0].course || a.length + b.length > 3) continue;
+        const cost = a.concat(b).reduce((s, l) => s + w(l), 0);
+        if (cost < bestCost) { best = i; bestCost = cost; }
       }
-      if (i === lessonDays.length - 1) while (k < seq.length) list.push(seq[k++]);
-      days[d] = { n: d, type: "lesson", lessons: list };
+      if (best < 0) for (let i = 0; i + 1 < units.length; i++) if (units[i].length + units[i + 1].length <= 3) { best = i; break; }
+      if (best < 0) break;
+      units.splice(best, 2, units[best].concat(units[best + 1]));
+    }
+    const days = {};
+    lessonDays.forEach((d, i) => {
+      // fewer lessons than days: the extra days repeat the previous lesson as a practice day
+      const list = units[i] || null;
+      days[d] = list ? { n: d, type: "lesson", lessons: list } : { n: d, type: "lesson", lessons: units[units.length - 1], practice: true };
     });
+    // remember which plan day each lesson lives on (its first day)
+    Object.values(days).forEach((D) => { if (!D.practice) D.lessons.forEach((l) => { if (!l.day) l.day = D.n; }); });
+    // weekly challenge = the course most present in the previous 6 days; boss = the trilha of that course
+    const used = {}, bossUsed = {};
     let week = 0;
     for (const d of [...special].sort((a, b) => a - b)) {
       if (d === TOTAL_DAYS) { days[d] = { n: d, type: "final", ch: window.FINALE }; continue; }
       week++;
-      const ch = CHALLENGES[(week - 1) % Math.max(1, CHALLENGES.length)];
-      days[d] = { n: d, type: week % 4 === 0 ? "boss" : "week", week, ch };
+      const recap = [];
+      for (let x = d - 6; x < d; x++) if (days[x] && days[x].lessons && !days[x].practice) recap.push(...days[x].lessons);
+      const count = new Map();
+      recap.forEach((l) => count.set(l.course, (count.get(l.course) || 0) + 1));
+      const course = [...count.entries()].sort((a, b) => b[1] - a[1])[0];
+      const c = course ? course[0] : PLAN_COURSES[PLAN_COURSES.length - 1];
+      const boss = week % 4 === 0;
+      let ch = null;
+      if (boss && c && c.tn) { const list = CH_BOSS[c.tn - 1] || []; const k = bossUsed[c.tn] || 0; ch = list[k] || null; if (ch) bossUsed[c.tn] = k + 1; }
+      if (!ch && c) { const list = CH_COURSE[c.key] || []; const k = used[c.key] || 0; ch = list[k] || null; if (ch) used[c.key] = k + 1; }
+      if (!ch) ch = CHALLENGES[(week - 1) % Math.max(1, CHALLENGES.length)];
+      days[d] = { n: d, type: boss ? "boss" : "week", week, ch, course: c, recap };
     }
-    // remember which plan day each lesson lives on
-    Object.values(days).forEach((D) => (D.lessons || []).forEach((l) => (l.day = D.n)));
-    // the lessons of the previous 6 days feed the weekly challenge
-    Object.values(days).forEach((D) => {
-      if (D.type === "week" || D.type === "boss") {
-        D.recap = [];
-        for (let x = D.n - 6; x < D.n; x++) if (days[x] && days[x].lessons) D.recap.push(...days[x].lessons);
-      }
-    });
     return days;
   }
   const PLAN = buildPlan();
@@ -122,6 +142,7 @@
     mt: {},            // "ex:<id>" / "day:<n>" / "lab:<k>" / "cfg:<field>" / "photo:<id>" -> last change, so sync keeps the newest edit
     photoIdx: {},      // photoId -> {c: 1 once saved in the account, kind, day, ts} | {del: true, gone} once deleted (g: old Gist copy)
     devices: {},       // deviceId -> {kind, app, ver, fp, photos, at}: what each device had at its last sync
+    planV: PLAN_V,     // version of the Trilha 365 the days/exercises refer to
   });
 
   // Random id for this browser, kept outside the synced state.
@@ -136,6 +157,15 @@
     const o = Object.assign(defaultState(), s);
     o.gist = Object.assign({ id: "", token: "", lastSync: "" }, o.gist);
     if (o.xp && !Object.keys(o.xpBy).length) o.xpBy = { [DEVICE]: o.xp };
+    // Trilha 365 v2 (ordem do PDF, exercícios novos): the old day numbers and exercise marks no longer match,
+    // so they restart; XP, streak, badges, Lab and every photo stay.
+    if (!s || (s.planV || 1) < PLAN_V) {
+      o.days = {}; o.ex = {};
+      o.mt = Object.fromEntries(Object.entries(o.mt || {}).filter(([k]) => !/^(day|ex):/.test(k)));
+      // the new trail starts on its release day (same value on every device, so sync agrees)
+      if (o.startDate < PLAN_V_START) o.startDate = PLAN_V_START;
+      o.planV = PLAN_V;
+    }
     return o;
   }
   const touch = (k) => { S.mt[k] = new Date().toISOString(); };
@@ -330,7 +360,7 @@
     return d;
   }
   const prog = (v, max, label) => `<div class="prog" role="progressbar" aria-valuenow="${v}" aria-valuemax="${max}"><i style="width:${max ? Math.min(100, (v / max) * 100) : 0}%"></i><span>${label ?? `${v}/${max}`}</span></div>`;
-  const trackName = (t) => (t === "B" ? "Trilha Cor & Técnica" : "Trilha Fundamentos & Personagens");
+  const trilhaName = (c) => (c && c.trilha ? `${c.trilha.n} · ${c.trilha.t}` : "Extra");
   const exMinutes = (l) => (l.light ? 8 : 15);
 
   function renderChips() {
@@ -467,13 +497,15 @@
   // Photo button + thumbnails for one exercise / challenge / day (thumbnails are filled after render).
   const photoSlot = (ref, label) => `<div class="ex-foot"><label class="btn sm pink">${label}<input type="file" accept="image/*" multiple data-photo="${esc(ref)}" hidden></label><div class="thumbs" data-thumbs="${esc(ref)}"></div></div>`;
   function lessonCard(l, scope) {
-    return `<article class="lesson ${l.course.track === "B" ? "track-b" : ""} ${l.light ? "light" : ""}">
+    const first = l.n === 1 && l.course.unlock ? `<div class="note unlock" style="margin:8px 12px 0">🔓 <b>Começa o curso ${esc(l.course.title)}</b> (${esc(trilhaName(l.course))}). O que você vai desbloquear: ${esc(l.course.unlock)}</div>` : "";
+    return `<article class="lesson ${l.course.tn === 5 ? "track-b" : ""} ${l.light ? "light" : ""}">
       <header>
         <div class="lt"><b>${esc(l.title)}</b><span>${esc(l.course.title)}${l.mod && l.mod !== l.title ? " › " + esc(l.mod) : ""} · aula ${l.n}/${l.course.count}</span></div>
         <a class="btn sm" href="${l.url}" target="_blank" rel="noopener">▶ Abrir aula</a>
-      </header>
-      <div class="muted" style="padding:8px 12px 0;font-size:13px">Assista a aula (ou revise) e faça <b>1 dos 2 exercícios</b>. Fez os dois? Ganha bônus ⚡</div>
+      </header>${first}
+      <div class="muted" style="padding:8px 12px 0;font-size:13px">Assista a aula (ou revise) e faça <b>1 dos 2 exercícios</b>, que treinam o tema desta aula. Fez os dois? Ganha bônus ⚡</div>
       ${exBlock(l, 0, 0, scope)}${exBlock(l, 1, 0, scope)}
+      <div class="old-thumbs" data-old="${l.id}" hidden><div class="meta">🗂 Desenhos que você já tinha feito para esta aula (exercícios da versão anterior)</div><div class="thumbs" data-thumbs="old:${l.id}"></div></div>
     </article>`;
   }
 
@@ -481,7 +513,7 @@
     const ch = D.ch || { t: "Desafio", d: "", steps: [] };
     const recap = D.recap && D.recap.length ? `<details style="margin-top:12px"><summary class="mono">📼 Aulas da semana para revisar (${D.recap.length})</summary><ul class="clean">${D.recap.map((l) => `<li>• <a href="${l.url}" target="_blank" rel="noopener">${esc(l.title)}</a> <span class="muted">— ${esc(l.course.title)}</span></li>`).join("")}</ul></details>` : "";
     return `<div class="lesson ${D.type === "boss" ? "track-b" : "light"}">
-      <header><div class="lt"><b>${esc(ch.t)}</b><span>${D.type === "boss" ? "Boss do mês · vale 100 XP" : D.type === "final" ? "Grande final · vale 365 XP" : "Desafio semanal · vale 50 XP"}</span></div></header>
+      <header><div class="lt"><b>${esc(ch.t)}</b><span>${D.type === "boss" ? `Boss do mês · ${esc(trilhaName(D.course))} · vale 100 XP` : D.type === "final" ? "Grande final · vale 365 XP" : `Desafio da semana · ${esc(D.course ? D.course.title : "")} · vale 50 XP`}</span></div></header>
       <div style="padding:12px">
         <p>${esc(ch.d)}</p>
         ${ch.steps && ch.steps.length ? `<ol>${ch.steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>` : ""}
@@ -520,7 +552,7 @@
     const D = PLAN[n];
     return win(`Dia_${String(n).padStart(3, "0")}.exe`, `
       <div class="hero"><div class="daynum">${n}<small>de 365</small></div>
-      <div class="info"><div class="kicker">${D.type === "lesson" ? trackName(D.lessons[0].course.track) : "Dia especial"}</div><h1>${dayTitle(D)}</h1><div>${dayTags(D)}</div></div></div>
+      <div class="info"><div class="kicker">${D.type === "lesson" ? trilhaName(D.lessons[0].course) : D.course ? "Dia especial · " + trilhaName(D.course) : "Dia especial"}</div><h1>${dayTitle(D)}</h1><div>${dayTags(D)}</div></div></div>
       <hr class="hr">${dayBody(n)}`, { icon: "📅", status: [`Previsto para ${fmtDate(addDays(S.startDate, n - 1))}`, isDayDone(n) ? "✔ concluído" : "pendente"] });
   }
 
@@ -591,27 +623,39 @@
   }
 
   /* ---------------------------------------------------------------- views: map */
+  // The map follows the PDF: Trilha → curso → dias (a challenge day sits with the course of the days before it).
   function viewMap() {
     const cur = currentDay();
-    let html = "";
-    for (let m = 0; m < 13; m++) {
-      const from = m * 28 + 1, to = Math.min(TOTAL_DAYS, from + 27);
-      if (from > TOTAL_DAYS) break;
-      const cells = [];
-      for (let d = from; d <= to; d++) {
-        const D = PLAN[d];
-        const cls = [D.type === "week" ? "wk" : D.type === "boss" ? "boss" : D.type === "final" ? "final" : "", isDayDone(d) ? "done" : "", d === cur ? "cur" : ""].join(" ");
-        const ttl = D.type === "lesson" ? D.lessons.map((l) => l.title).join(" + ") : (D.ch && D.ch.t) || "";
-        cells.push(`<button class="${cls}" data-go-day="${d}" title="Dia ${d}: ${esc(ttl)}">${D.type === "boss" ? "👹" : D.type === "week" ? "★" : D.type === "final" ? "👑" : d}</button>`);
-      }
-      const done = Array.from({ length: to - from + 1 }, (_, i) => from + i).filter(isDayDone).length;
-      html += `<h3 style="margin-top:${m ? 18 : 0}px">Ciclo ${m + 1} <span class="muted mono">· dias ${from}–${to} · ${done}/${to - from + 1}</span></h3><div class="map">${cells.join("")}</div>`;
+    const groups = [];
+    for (let d = 1; d <= TOTAL_DAYS; d++) {
+      const D = PLAN[d];
+      const c = D.type === "lesson" ? D.lessons[0].course : null;
+      const last = groups[groups.length - 1];
+      if (c && (!last || last.c !== c)) groups.push({ c, days: [d] });
+      else if (last) last.days.push(d);
     }
+    const cell = (d) => {
+      const D = PLAN[d];
+      const cls = [D.type === "week" ? "wk" : D.type === "boss" ? "boss" : D.type === "final" ? "final" : "", isDayDone(d) ? "done" : "", d === cur ? "cur" : ""].join(" ");
+      const ttl = D.type === "lesson" ? D.lessons.map((l) => l.title).join(" + ") : (D.ch && D.ch.t) || "";
+      return `<button class="${cls}" data-go-day="${d}" title="Dia ${d}: ${esc(ttl)}">${D.type === "boss" ? "👹" : D.type === "week" ? "★" : D.type === "final" ? "👑" : d}</button>`;
+    };
+    let html = "";
+    TRILHAS.forEach((t) => {
+      const gs = groups.filter((g) => g.c.trilha === t);
+      if (!gs.length) return;
+      const all = gs.flatMap((g) => g.days), done = all.filter(isDayDone).length;
+      html += `<section class="trilha"><h2>${t.ico || "✦"} ${esc(t.n)} · ${esc(t.t)} <span class="muted mono">· dias ${all[0]}–${all[all.length - 1]} · ${done}/${all.length}</span></h2>
+        <p class="muted" style="margin:0 0 6px">${esc(t.d)}</p>${prog(done, all.length)}
+        ${gs.map((g, i) => `<h3 style="margin-top:14px">${i + 1}. ${esc(g.c.title)} <span class="muted mono">· ${g.c.count} aulas · dias ${g.days[0]}–${g.days[g.days.length - 1]}</span></h3>
+          ${g.c.unlock ? `<p class="unlock-txt">🔓 ${esc(g.c.unlock)}</p>` : ""}<div class="map">${g.days.map(cell).join("")}</div>`).join("")}</section>`;
+    });
     return win("Trilha_365.map", `
-      <p>Cada quadradinho é um dia (~30 min). A trilha alterna <b>Fundamentos & Personagens</b> com <b>Cor, Técnica & Mentorias</b>, cobrindo <b>todas as ${LESSONS.length} aulas</b> dos ${COURSES.length} cursos. A cada 7 dias tem um desafio ★, e a cada 4 semanas um Boss 👹.</p>
+      <p>A trilha segue a <b>ordem dos treinamentos</b> da Ilustra Academy: ${TRILHAS.map((t) => `<b>${esc(t.n)}</b> (${esc(t.t)})`).join(" → ")}. São <b>${PLAN_COURSES.length} cursos</b> e <b>${PLAN_COURSES.reduce((s, c) => s + c.count, 0)} aulas</b>, uma por dia, na mesma ordem das aulas de cada curso. A cada 7 dias tem um desafio ★ do curso da semana e a cada 4 semanas um Boss 👹 da trilha.</p>
       ${prog(doneCount(), 365, `${doneCount()} de 365 dias`)}
       <div class="legend"><span><i style="background:var(--paper)"></i>aula</span><span><i style="background:var(--lilac)"></i>desafio</span><span><i style="background:var(--pink-2)"></i>boss</span><span><i style="background:var(--ok)"></i>feito</span><span><i style="outline:3px solid var(--hot)"></i>próximo</span></div>
-      <hr class="hr">${html}`, { icon: "🗺️", menu: ["Mapa", "Ciclos", "Legenda"], status: [`Próximo: dia ${cur}`, `${LESSONS.length} aulas`, `${COURSES.length} cursos`] });
+      <hr class="hr">${html}
+      <p class="muted" style="font-size:13px;margin-top:14px">Os outros cursos da plataforma (livros infantis, pintura digital, mentorias, lives...) continuam na 📚 Biblioteca, com exercícios, como extras fora da trilha.</p>`, { icon: "🗺️", menu: ["Mapa", "Trilhas", "Legenda"], status: [`Próximo: dia ${cur}`, `${PLAN_COURSES.reduce((s, c) => s + c.count, 0)} aulas`, `${PLAN_COURSES.length} cursos`] });
   }
 
   /* ---------------------------------------------------------------- views: library */
@@ -621,7 +665,7 @@
     const total = LESSONS.length, withEx = LESSONS.filter((l) => l.ex.length === 2).length;
     const doneEx = Object.values(S.ex).reduce((s, e) => s + (e[0] ? 1 : 0) + (e[1] ? 1 : 0), 0);
     return win("Biblioteca.dir", `
-      <p>Todos os cursos, módulos e aulas da Ilustra Academy, cada aula com <b>2 exercícios</b> e o link direto pra ela. Marque aqui o que já praticou fora da trilha também.</p>
+      <p>Todos os cursos, módulos e aulas da Ilustra Academy, cada aula com <b>2 exercícios</b> e o link direto pra ela. Primeiro vêm os cursos da trilha, na ordem dos treinamentos; depois os extras. Marque aqui o que já praticou fora da trilha também.</p>
       <div class="kpi" style="margin-bottom:14px"><div><b>${COURSES.length}</b><span>cursos</span></div><div><b>${total}</b><span>aulas</span></div><div><b>${withEx * 2}</b><span>exercícios</span></div><div><b>${doneEx}</b><span>feitos</span></div></div>
       <div class="filters"><input type="search" id="libq" placeholder="Buscar aula, curso ou palavra do exercício..." value="${esc(libQuery)}" aria-label="Buscar"></div>
       <div id="libout">${libraryList(cats)}</div>`, { icon: "📚", menu: ["Arquivo", "Buscar", "Exibir"], status: [`${total} aulas`, `${withEx * 2} exercícios`] });
@@ -641,11 +685,11 @@
           if (l.mod !== mod) { mod = l.mod; if (mod) rows += `<div class="mod-title">${esc(mod)}</div>`; }
           const e = S.ex[l.id] || [];
           rows += `<div class="lrow"><div class="lh"><span class="mono">${String(l.n).padStart(2, "0")}</span><b>${esc(l.title)}</b>
-            <a href="${l.url}" target="_blank" rel="noopener">▶ aula</a> <a href="#dia/${l.day}">· dia ${l.day}</a></div>
+            <a href="${l.url}" target="_blank" rel="noopener">▶ aula</a>${l.day ? ` <a href="#dia/${l.day}">· dia ${l.day}</a>` : ""}</div>
             <ol>${l.ex.map((x, i) => `<li class="${e[i] ? "done" : ""}"><label><input type="checkbox" data-act="toggle-ex" data-l="${l.id}" data-i="${i}" data-scope="lib" ${e[i] ? "checked" : ""}> <b>${esc(x[0])}</b></label> — ${esc(x[1])}${x[2] ? ` <i class="muted">💡 ${esc(x[2])}</i>` : ""}</li>`).join("")}</ol></div>`;
         }
-        return `<details class="course" ${q ? "open" : ""}><summary><b>${esc(c.title)}</b><span class="tag ${c.track === "B" ? "pink" : "lilac"}">${c.count} aulas</span><span style="min-width:120px;flex:0 0 140px">${prog(p.done, p.total)}</span><a class="btn sm" href="${COURSE_URL + c.id}" target="_blank" rel="noopener">abrir curso</a></summary>
-          <div class="cbody">${c.desc ? `<p class="muted">${esc(c.desc)}</p>` : ""}${rows}</div></details>`;
+        return `<details class="course" ${q ? "open" : ""}><summary><b>${esc(c.title)}</b><span class="tag ${c.trilha ? "lilac" : "pink"}">${c.count} aulas</span><span style="min-width:120px;flex:0 0 140px">${prog(p.done, p.total)}</span><a class="btn sm" href="${COURSE_URL + c.id}" target="_blank" rel="noopener">abrir curso</a></summary>
+          <div class="cbody">${c.unlock ? `<p class="muted">🔓 ${esc(c.unlock)}</p>` : c.desc ? `<p class="muted">${esc(c.desc)}</p>` : ""}${rows}</div></details>`;
       }).join("");
       if (blocks) out += `<h2 style="margin-top:18px">${esc(cat)}</h2>${blocks}`;
     }
@@ -694,7 +738,7 @@
       <p>${got}/${BADGES.length} conquistas desbloqueadas.</p>
       <div class="badges">${BADGES.map((b) => `<div class="badge ${S.badges[b.id] ? "got" : ""}"><div class="ico">${b.ico}</div><b>${esc(b.t)}</b><small>${esc(b.d)}${S.badges[b.id] ? `<br>✔ ${fmtDate(S.badges[b.id])}` : ""}</small></div>`).join("")}</div>
     `, { icon: "🏆" }) + win("Desafios_e_Bosses.lst", `
-      <p>Os desafios usam o que você praticou na semana e puxam pro seu universo: criaturas, sci-fi, cyberpunk e magia cósmica.</p>
+      <p>Cada desafio semanal usa o curso que você estudou na semana; os Bosses juntam tudo da trilha.</p>
       <ul class="clean">${chList.map((D) => `<li>${isDayDone(D.n) ? "✅" : D.type === "boss" ? "👹" : D.type === "final" ? "👑" : "★"} <a href="#dia/${D.n}">Dia ${D.n} — ${esc((D.ch && D.ch.t) || "")}</a></li>`).join("")}</ul>`, { icon: "★" });
   }
 
@@ -703,9 +747,17 @@
   let PHOTOS = null;
   const photos = async () => PHOTOS || (PHOTOS = (await idbAll("photos").catch(() => [])).sort((a, b) => (a.ts || 0) - (b.ts || 0)));
   // ref: "ex:<lessonId>:<i>" | "lab:<module>:<i>" | "ch:<day>" | "day:<day>" | "" (avulso). Old photos only have `day`.
-  const photoRef = (p) => p.ref || (p.day ? "day:" + p.day : "");
+  // Photos sent before the v2 trail (no pv) keep their lesson but not the exercise slot: "old:<lessonId>" or "oldday:<old day>".
+  function photoRef(p) {
+    const r = p.ref || (p.day ? "day:" + p.day : "");
+    if ((p.pv || 1) >= PLAN_V) return r;
+    const [kind, a] = r.split(":");
+    return kind === "ex" ? "old:" + a : kind === "ch" || kind === "day" ? "oldday:" + a : r;
+  }
   function photoInfo(p) {
     const [kind, a, b] = photoRef(p).split(":");
+    if (kind === "old") { const l = LESSON_BY_ID[a]; return { group: l && l.day ? "trilha" : "livre", day: l && l.day, what: l ? `Aula “${l.title}”` : "Desenho de exercício", sub: "exercício da versão anterior" }; }
+    if (kind === "oldday") return { group: "antigo", what: `Desenho do dia ${a} da trilha antiga`, sub: "versão anterior" };
     if (kind === "ex") { const l = LESSON_BY_ID[a], e = l && l.ex[+b]; return { group: "trilha", day: l && l.day, what: e ? `Exercício ${+b + 1}: ${e[0]}` : "Exercício", sub: l ? l.title : "" }; }
     if (kind === "lab") { const m = (LAB.modules || []).find((x) => x.id === a), e = m && (m.ex || [])[+b]; return { group: "lab", mod: m, what: e ? `Experimento ${+b + 1}: ${e[0]}` : "Lab Cósmico", sub: m ? m.title : "" }; }
     if (kind === "ch") { const D = PLAN[+a]; return { group: "trilha", day: +a, what: (D && D.ch && D.ch.t) || "Desafio", sub: "Desafio" }; }
@@ -720,6 +772,7 @@
     els.forEach((el) => {
       const list = all.filter((p) => photoRef(p) === el.dataset.thumbs);
       el.innerHTML = list.map((p) => `<button class="thumb" data-view="${p.id}" data-set="${esc(el.dataset.thumbs)}" title="Ver em tela cheia"><img src="${p.data}" alt="${esc(photoCaption(p))}"></button>`).join("");
+      const box = el.closest(".old-thumbs"); if (box) box.hidden = !list.length;
     });
   }
 
@@ -740,9 +793,10 @@
     const art = all.filter((p) => p.kind !== "mood");
     S._photoCount = art.length;
     const cnt = $("#gal-count"); if (cnt) cnt.textContent = `${art.length} desenho(s) · ${new Set(art.map((p) => photoInfo(p).day).filter(Boolean)).size} dia(s) com foto`;
-    const shown = all.filter((p) => galFilter === "tudo" || photoInfo(p).group === galFilter).reverse(); // newest first
+    const inFilter = (g) => galFilter === "tudo" || g === galFilter || (galFilter === "trilha" && g === "antigo");
+    const shown = all.filter((p) => inFilter(photoInfo(p).group)).reverse(); // newest first
     galIds = shown.map((p) => p.id);
-    const card = (p) => { const i = photoInfo(p); return `<figure class="shot"><button data-view="${p.id}" data-set="gal" title="Ver em tela cheia"><img src="${p.data}" alt="${esc(photoCaption(p))}" loading="lazy"></button><figcaption><b>${esc(i.what)}</b><span>${esc(fmtDate(p.date))}</span></figcaption></figure>`; };
+    const card = (p) => { const i = photoInfo(p); return `<figure class="shot"><button data-view="${p.id}" data-set="gal" title="Ver em tela cheia"><img src="${p.data}" alt="${esc(photoCaption(p))}" loading="lazy"></button><figcaption><b>${esc(i.what)}</b><span>${/anterior/.test(i.sub || "") ? esc(i.sub) + " · " : ""}${esc(fmtDate(p.date))}</span></figcaption></figure>`; };
     const groups = [];
     const byKey = new Map();
     for (const p of shown) {
@@ -752,7 +806,7 @@
         const D = i.day && PLAN[i.day];
         const head = i.group === "trilha" ? `<a href="#dia/${i.day}">Dia ${i.day}</a> · ${D ? dayTitle(D) : ""}`
           : i.group === "lab" ? `<a href="#lab/${i.mod ? i.mod.id : ""}">👾 ${esc(i.sub || "Lab Cósmico")}</a>`
-          : i.group === "mood" ? "🧷 Moodboard (suas referências)" : "✏️ Desenhos avulsos";
+          : i.group === "mood" ? "🧷 Moodboard (suas referências)" : i.group === "antigo" ? "🗂 Desenhos da versão anterior da trilha" : "✏️ Desenhos avulsos";
         byKey.set(key, { head, items: [] }); groups.push(byKey.get(key));
       }
       byKey.get(key).items.push(p);
@@ -770,7 +824,7 @@
     const day = kind0 === "ex" ? (LESSON_BY_ID[a] || {}).day || null : kind0 === "ch" || kind0 === "day" ? +a : null;
     for (const f of files) {
       const data = await shrink(f, 1800);
-      await idbPut("photos", null, { id: Date.now() + "-" + Math.random().toString(36).slice(2, 7), kind: tag === "mood" ? "mood" : "art", ref, day, date: todayISO(), ts: Date.now(), label: f.name, data });
+      await idbPut("photos", null, { id: Date.now() + "-" + Math.random().toString(36).slice(2, 7), kind: tag === "mood" ? "mood" : "art", ref, day, date: todayISO(), ts: Date.now(), label: f.name, data, pv: PLAN_V });
     }
     PHOTOS = null;
     // Sending the photo of an exercise also marks it as done.
@@ -1041,17 +1095,20 @@
     return out;
   }
 
+  // Trilha v2 lives in its own document, so an app still on the old version can't mix old day marks back in.
+  // The first time, the old document is read once (and migrated by fixState) to bring XP, badges and photos along.
+  const PROGRESS_DOC = "data/progress" + PLAN_V;
+  const parseDoc = (j) => { const raw = j && j.fields && j.fields.json && j.fields.json.stringValue; const data = raw ? JSON.parse(raw) : null; return data && data.app === "rabisco-os" && data.state ? fixState(data.state) : null; };
   async function readCloud() {
-    const j = await fs(userPath("data/progress"), { miss: true });
-    if (!j) return { remote: null, time: "" };
-    const raw = j.fields && j.fields.json && j.fields.json.stringValue;
-    const data = raw ? JSON.parse(raw) : null;
-    return { remote: data && data.app === "rabisco-os" && data.state ? fixState(data.state) : null, time: j.updateTime || "" };
+    const j = await fs(userPath(PROGRESS_DOC), { miss: true });
+    if (j) return { remote: parseDoc(j), time: j.updateTime || "" };
+    const old = await fs(userPath("data/progress"), { miss: true });
+    return { remote: old ? parseDoc(old) : null, time: "" };
   }
   // The precondition makes a write fail if another device saved in between; the sync then merges again instead of overwriting.
   function writeCloud(time) {
     const pre = time ? "currentDocument.updateTime=" + encodeURIComponent(time) : "currentDocument.exists=false";
-    return fs(userPath("data/progress") + "?" + pre, { method: "PATCH", body: JSON.stringify({ fields: { json: { stringValue: syncPayload() }, at: { timestampValue: new Date().toISOString() } } }) });
+    return fs(userPath(PROGRESS_DOC) + "?" + pre, { method: "PATCH", body: JSON.stringify({ fields: { json: { stringValue: syncPayload() }, at: { timestampValue: new Date().toISOString() } } }) });
   }
   async function doSync() {
     let changed = false;
